@@ -266,3 +266,31 @@ test(
     }
   },
 );
+
+test('restore stops services before its safety backup so no write can be lost', () => {
+  const cli = read('installer/bundle/invoice-generator');
+  const restore = cli.slice(cli.indexOf('cmd_restore() {'), cli.indexOf('# Fetches and verifies'));
+  assert.ok(restore.indexOf('stop_services\n') < restore.indexOf('create_backup pre-restore'));
+  assert.ok(
+    restore.indexOf('preserve_database failed-restore') <
+      restore.indexOf('database="$(unpack_backup "$pre"'),
+  );
+});
+
+test('upgrade rollback preserves the post-switch database before restoring old data', () => {
+  const cli = read('installer/bundle/invoice-generator');
+  const upgrade = cli.slice(cli.indexOf('cmd_upgrade() {'), cli.indexOf('refresh_schedule() {'));
+  const rollback = upgrade.slice(upgrade.indexOf('新版本启动失败'));
+  assert.ok(
+    upgrade.indexOf('stop_services "$old_dir"') <
+      upgrade.indexOf('create_backup final-pre-upgrade'),
+  );
+  assert.ok(
+    rollback.indexOf('stop_services "$new_dir"') <
+      rollback.indexOf('preserve_database failed-upgrade'),
+  );
+  assert.ok(
+    rollback.indexOf('preserve_database failed-upgrade') < rollback.indexOf('replace_database'),
+  );
+  assert.match(rollback, /die UPGRADE_ROLLBACK_HALTED/);
+});

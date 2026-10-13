@@ -62,7 +62,7 @@ sudo invoice-generator backups
 sudo invoice-generator restore /opt/invoice-generator/backups/invoice-generator-20260101T033000Z-auto.sqlite.gz
 ```
 
-恢复前会校验 SHA-256、数据库完整性和版本（不能恢复来自更新版本的备份），显示备份内容摘要，要求输入 `RESTORE` 确认，并自动备份当前数据。恢复后应用无法启动会自动还原。恢复后所有用户需要重新登录。
+恢复前会校验 SHA-256、数据库完整性和版本（不能恢复来自更新版本的备份），显示备份内容摘要，要求输入 `RESTORE` 确认，然后先停止服务、再备份当前数据，确保备份与被替换的数据完全一致。恢复后应用无法启动会自动还原。恢复后所有用户需要重新登录。
 
 ## 升级
 
@@ -79,7 +79,7 @@ sudo invoice-generator upgrade v1.2.3   # 指定版本
 4. 停止服务并做最终备份；
 5. 切换到新版本并检查健康。
 
-第 1–3 步失败时不做任何更改；第 5 步失败时自动回滚到原版本和升级前数据。不支持降级。
+第 1–3 步失败时不做任何更改；第 5 步失败时，先把新版本运行期间的数据库另存为 `*-failed-upgrade` 备份，再自动回滚到原版本和升级前数据。若新版本在失败前已有用户录入数据，这些数据保存在该备份中，需要人工核对补录；回滚不会直接丢弃它们。不支持降级。
 
 ## 常见错误代码
 
@@ -95,7 +95,8 @@ sudo invoice-generator upgrade v1.2.3   # 指定版本
 | `BACKUP_CHECKSUM_MISMATCH` / `BACKUP_INVALID` | 备份文件损坏或被修改，未做任何更改 |
 | `BACKUP_SCHEMA_TOO_NEW` | 备份来自更新的版本，请先升级 |
 | `CANDIDATE_FAILED` | 新版本未通过隔离验证，当前版本未改动 |
-| `UPGRADE_ROLLED_BACK` | 新版本启动失败，已回滚到原版本和升级前数据 |
+| `UPGRADE_ROLLED_BACK` | 新版本启动失败，已回滚到原版本和升级前数据；新版本期间的数据另存为 `*-failed-upgrade` 备份 |
+| `UPGRADE_ROLLBACK_HALTED` / `RESTORE_ROLLBACK_HALTED` | 无法先保存当前数据库，为避免丢失数据已停止回滚，服务处于停止状态，请勿删除任何文件并人工处理 |
 | `DOWNGRADE_REFUSED` | 不支持降级 |
 | `BUSY` | 另一个管理操作正在进行 |
 

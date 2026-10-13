@@ -19,7 +19,7 @@
 - SQLite、银行账户、客户、签名、公章和附件未做应用层静态加密；依赖服务器磁盘、文件权限、主机访问控制和加密离机备份。
 - 纯TEST数据的PI、CI、Packing List回归、依赖审计以及Production Docker镜像验证均在GitHub Actions Ubuntu Runner执行。
 - SQLite适合单用户/少量用户单实例；不要让多个应用容器同时写同一个SQLite文件。
-- 升级先在数据库副本上用新版本验证迁移和健康检查，正式切换失败时恢复原版本与升级前数据库。不支持降级；未来如引入无法由整库恢复覆盖的外部状态或不可逆变更，需要独立降级方案。
+- 升级先在数据库副本上用新版本验证迁移和健康检查，正式切换失败时先另存新版本期间的数据库，再恢复原版本与升级前数据库；新版本期间录入的业务数据需人工核对补录。升级过程中服务会短暂停止（备份与切换期间）。不支持降级；未来如引入无法由整库恢复覆盖的外部状态或不可逆变更，需要独立降级方案。
 - 域名模式的自动 HTTPS 依赖域名正确指向服务器且公网 80/443 可访问；公网 IP 模式依赖 Let's Encrypt IP 证书，申请失败时使用本机 CA 证书，需要用户手动信任根证书。仅支持 IPv4 访问地址。已有宿主机 Caddy 的自动接入只支持域名，Nginx 只生成配置示例。
 - 一键安装程序面向 Ubuntu 22.04 / 24.04 与 Debian 12 / 13（x86_64、arm64）；其他系统需自行安装 Docker。自动备份只保存在本机，异地备份需要用户自行复制。
-- Docker build、Compose、Caddy代理、登录、业务E2E、一键安装（域名 / 公网IP / 已有Nginx）、备份恢复、升级与故障回滚均已在GitHub Actions Ubuntu Runner通过。仍待真实VPS验收：真实DNS、Let's Encrypt 证书申请与续期（含IP证书）、真实环境长期运行，以及加密离机灾备的恢复演练。本项目仍是Production Release Candidate，不代表已完成真实环境认证。
+- Docker build、Compose、Caddy代理、登录、业务E2E、一键安装（域名 / 公网IP / 已有Nginx）、备份恢复、升级与故障回滚均已在GitHub Actions Ubuntu Runner通过。仍待真实VPS验收（尚未通过，不得视为已验证）：真实DNS、Let's Encrypt 域名证书与 IP 证书的申请和续期、arm64 服务器上的实际运行（目前只构建了 arm64 镜像）、真实环境长期运行，以及加密离机灾备的恢复演练。本项目仍是Production Release Candidate，不代表已完成真实环境认证。

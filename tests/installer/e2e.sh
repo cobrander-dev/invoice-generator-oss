@@ -74,9 +74,22 @@ step 'build test images and release bundles'
 docker build -q -t invoice-generator:ci-a "$root" >/dev/null
 printf 'FROM invoice-generator:ci-a\nLABEL ci.release=b\n' | docker build -q -t invoice-generator:ci-b - >/dev/null
 printf 'FROM invoice-generator:ci-a\nCMD ["node","-e","process.exit(1)"]\n' | docker build -q -t invoice-generator:ci-broken - >/dev/null
-# Healthy in the network-less candidate check, fails once started on the real network.
-printf 'FROM invoice-generator:ci-a\nCMD ["sh","-c","[ -e /sys/class/net/eth0 ] && exit 1; exec node server/server.js"]\n' |
-  docker build -q -t invoice-generator:ci-late-failure - >/dev/null
+# Healthy in the network-less candidate check. Once promoted onto the real network it writes a
+# business record (like a user saving data on the new version) and then crashes.
+mkdir -p "$work/late-image"
+cat >"$work/late-image/write-then-fail.js" <<'JS'
+const Database = require('better-sqlite3');
+const { migrateDatabase } = require('/app/server/db/migrations');
+const db = new Database(process.env.DATABASE_PATH);
+migrateDatabase(db);
+db.prepare("INSERT OR IGNORE INTO customers (id, payload_json, updated_at, lifecycle_state) VALUES (?, ?, ?, 'ACTIVE')")
+  .run('customer-written-after-switch', JSON.stringify({ id: 'customer-written-after-switch', buyerName: 'After switch' }), Date.now());
+db.close();
+process.exit(1);
+JS
+printf 'FROM invoice-generator:ci-a\nCOPY write-then-fail.js /app/write-then-fail.js\nCMD ["sh","-c","[ -e /sys/class/net/eth0 ] && exec node /app/write-then-fail.js; exec node server/server.js"]\n' \
+  >"$work/late-image/Dockerfile"
+docker build -q -t invoice-generator:ci-late-failure "$work/late-image" >/dev/null
 docker pull -q "$caddy_image" >/dev/null
 for spec in a:v0.0.1-ci.1:ci-a b:v0.0.1-ci.2:ci-b broken:v0.0.1-ci.3:ci-broken late:v0.0.1-ci.4:ci-late-failure; do
   IFS=: read -r name version tag <<<"$spec"
@@ -159,7 +172,9 @@ api_post /api/customers '{"id":"customer-ci-b","buyerName":"CI Buyer B"}'
 invoice-generator restore "$backup" --yes
 login
 [[ "$(customer_count)" == 1 ]] || fail 'restore did not return to the backup state'
-find /opt/invoice-generator/backups -name '*-pre-restore.sqlite.gz' | grep -q . || fail 'pre-restore safety backup missing'
+pre_restore_summary="$(find /opt/invoice-generator/backups -name '*-pre-restore.json' | sort | tail -n 1)"
+[[ -n "$pre_restore_summary" ]] || fail 'pre-restore safety backup missing'
+[[ "$(jq '.counts.customers' "$pre_restore_summary")" == 2 ]] || fail 'pre-restore backup does not contain the latest data'
 
 step 'corrupted and tampered backups are refused without touching data'
 printf 'not a database' | gzip >"$work/corrupt.sqlite.gz"
@@ -189,7 +204,10 @@ expect_failure UPGRADE_ROLLED_BACK invoice-generator upgrade --bundle "$dist/lat
 [[ "$(installed_version)" == v0.0.1-ci.2 && "$(running_image)" == invoice-generator:ci-b ]] || fail 'rollback version'
 invoice-generator doctor
 login
-[[ "$(customer_count)" == 2 ]] || fail 'rollback lost data'
+[[ "$(customer_count)" == 2 ]] || fail 'rollback did not return to the pre-upgrade data'
+failed_summary="$(find /opt/invoice-generator/backups -name '*-failed-upgrade.json' | sort | tail -n 1)"
+[[ -n "$failed_summary" ]] || fail 'database written after the switch was not preserved'
+[[ "$(jq '.counts.customers' "$failed_summary")" == 3 ]] || fail 'preserved database is missing the record written after the switch'
 
 step 'wrong checksums and downgrades are refused'
 expect_failure RELEASE_CHECKSUM_MISMATCH invoice-generator upgrade --bundle "$dist/b/invoice-generator-installer.tar.gz" --sha256 "$(printf '0%.0s' {1..64})" --yes

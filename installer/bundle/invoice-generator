@@ -162,15 +162,23 @@ cmd_restore() {
   summary="$IG_VERIFY_RESULT"
   say "备份内容：$summary"
   confirm_phrase RESTORE '恢复会用该备份替换当前全部数据（包括账号）。恢复前会自动备份当前数据。'
-  pre="$(create_backup pre-restore | tail -n 1)"
-  say "已备份当前数据：$pre"
+  # Stop first so nothing can be written between the safety backup and the replacement.
   stop_services
+  pre="$(create_backup pre-restore | tail -n 1)" || {
+    start_services || true
+    die BACKUP_FAILED '恢复前备份失败，已恢复原服务，没有做任何更改。'
+  }
+  say "已备份当前数据：$pre"
   if replace_database "$IG_APP_IMAGE" "$database" && start_services && entry_healthy; then
     say '恢复完成，所有用户需要重新登录。'
     return 0
   fi
   warn '恢复后应用未能正常启动，正在还原恢复前的数据...'
   stop_services
+  local failed
+  failed="$(preserve_database failed-restore "$IG_CURRENT" "$IG_APP_IMAGE")" ||
+    die RESTORE_ROLLBACK_HALTED "无法保存恢复后的数据库，已停止还原以免丢失数据。恢复前备份：$pre"
+  note "恢复失败时的数据库已保存：$failed"
   database="$(unpack_backup "$pre" "$work")"
   replace_database "$IG_APP_IMAGE" "$database" && start_services ||
     die RESTORE_ROLLBACK_FAILED "还原失败，请联系管理员。恢复前备份：$pre"
@@ -299,13 +307,18 @@ cmd_upgrade() {
 
   warn '新版本启动失败，正在回滚到原版本和升级前数据...'
   stop_services "$new_dir"
+  # Keep whatever the new version may have written before replacing the database.
+  local failed
+  failed="$(preserve_database failed-upgrade "$new_dir" "$old_app_image")" ||
+    die UPGRADE_ROLLBACK_HALTED "无法保存新版本运行期间的数据库，已停止回滚以免丢失数据；服务已停止。升级前备份：$final"
+  note "新版本运行期间的数据库已保存：$failed"
   ln -sfn "$old_dir" "$IG_CURRENT.new"
   mv -Tf -- "$IG_CURRENT.new" "$IG_CURRENT"
   database="$(unpack_backup "$final" "$work")"
   if replace_database "$old_app_image" "$database" && start_services "$old_dir"; then
-    die UPGRADE_ROLLED_BACK "升级失败，已回滚到 $old_version 并恢复升级前数据（$final）。"
+    die UPGRADE_ROLLED_BACK "升级失败，已回滚到 $old_version 并恢复升级前数据（$final）。新版本运行期间如有新增业务数据，已保存在 $failed，需要人工核对补录。"
   fi
-  die UPGRADE_ROLLBACK_FAILED "升级失败且回滚未完成，请勿删除任何数据。升级前备份：$final"
+  die UPGRADE_ROLLBACK_FAILED "升级失败且回滚未完成，请勿删除任何数据。升级前备份：$final；新版本数据库：$failed"
 }
 
 refresh_schedule() {

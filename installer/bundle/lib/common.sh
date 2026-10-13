@@ -225,7 +225,7 @@ backup_files() {
 # verified, compressed and checksummed. Prints the backup path on the last line.
 create_backup() {
   local kind="$1" release_dir="${2:-$IG_CURRENT}" stamp name work result
-  [[ "$kind" =~ ^(auto|manual|pre-upgrade|pre-restore|final-pre-upgrade)$ ]] || die BACKUP_KIND_INVALID "$kind"
+  [[ "$kind" =~ ^(auto|manual|pre-upgrade|pre-restore|final-pre-upgrade|failed-upgrade|failed-restore)$ ]] || die BACKUP_KIND_INVALID "$kind"
   load_release "$release_dir"
   install -d -m 0700 "$IG_BACKUP_DIR"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -261,6 +261,33 @@ prune_auto_backups() {
   for name in "${old[@]}"; do
     rm -f -- "$IG_BACKUP_DIR/$name" "$IG_BACKUP_DIR/$name.sha256" "$IG_BACKUP_DIR/${name%.sqlite.gz}.json"
   done
+}
+
+# preserve_database KIND RELEASE_DIR FALLBACK_IMAGE: saves the live database before a rollback
+# overwrites it, so data written after a switch is never discarded. Services must be stopped.
+# Uses a verified backup when possible, otherwise a raw copy of the SQLite files. Prints the path.
+preserve_database() {
+  local kind="$1" release_dir="$2" fallback_image="$3" path name work
+  if path="$( (create_backup "$kind" "$release_dir") 2>/dev/null | tail -n 1)" && [[ -f "$path" ]]; then
+    printf '%s\n' "$path"
+    return 0
+  fi
+  name="invoice-generator-$(date -u +%Y%m%dT%H%M%SZ)-$kind-raw.tar.gz"
+  install -d -m 0700 "$IG_BACKUP_DIR"
+  work="$(mktemp -d "$IG_BACKUP_DIR/.work.XXXXXX")"
+  IG_HELPER_SCRIPT="set -eu
+    cd /app/data
+    tar -czf /out/database.tar.gz \$(ls -1 invoice-generator.sqlite invoice-generator.sqlite-wal invoice-generator.sqlite-shm 2>/dev/null)"
+  if data_helper "$fallback_image" -v "$work:/out" && [[ -s "$work/database.tar.gz" ]]; then
+    mv -f -- "$work/database.tar.gz" "$IG_BACKUP_DIR/$name"
+    chmod 600 "$IG_BACKUP_DIR/$name"
+    (cd "$IG_BACKUP_DIR" && sha256sum "$name" >"$name.sha256" && chmod 600 "$name.sha256")
+    rm -rf -- "$work"
+    printf '%s\n' "$IG_BACKUP_DIR/$name"
+    return 0
+  fi
+  rm -rf -- "$work"
+  return 1
 }
 
 # Decompresses a verified backup into a private work directory; prints the SQLite path.
