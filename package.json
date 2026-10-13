@@ -1,0 +1,46 @@
+{
+  "name": "invoice-generator-oss",
+  "version": "1.0.0",
+  "private": true,
+  "description": "自托管外贸单据系统：PI、CI 和 Packing List 生成，带服务器认证与 SQLite 存储",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cobrander-dev/invoice-generator-oss.git"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node tests/run-tests.js && node tests/db-tests.js",
+    "start:server": "node --env-file-if-exists=.env server/server.js",
+    "admin:init": "node --env-file-if-exists=.env server/scripts/init-admin.js",
+    "admin:status": "node --env-file-if-exists=.env server/scripts/admin-status.js",
+    "admin:reset-password": "node --env-file-if-exists=.env server/scripts/reset-admin-password.js",
+    "db:backup": "node --env-file-if-exists=.env server/scripts/backup-database.js",
+    "test:server": "node --test tests/server/auth.test.js tests/server/session.test.js tests/server/security.test.js",
+    "test:server:business": "node --test tests/server/business-*.test.js",
+    "test:server:phase3": "node --test tests/server/frontend-business-api.test.js tests/server/frontend-api-adapter.test.js",
+    "test:server:phase4": "node --test tests/server/phase4-business-operations.test.js",
+    "test:server:phase5": "node --test tests/server/phase5-production-readiness.test.js",
+    "test:server:phase7": "node --test tests/server/phase7-production-blockers.test.js",
+    "test:server:host-caddy": "node --test tests/server/host-caddy-deployment.test.js",
+    "test:server:multi-user": "node --test tests/server/multi-user-*.test.js",
+    "test:pdf:phase6": "node tests/pdf-dependency-regression.js",
+    "test:all": "npm test && npm run test:pdf:phase6 && node --test tests/server/*.test.js"
+  },
+  "dependencies": {
+    "argon2": "0.45.1",
+    "better-sqlite3": "13.0.3",
+    "express": "5.2.1",
+    "express-rate-limit": "8.7.0",
+    "express-session": "1.19.0",
+    "helmet": "8.3.0",
+    "jspdf": "4.2.1",
+    "jspdf-autotable": "5.0.8",
+    "jszip": "3.10.1"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.4"
+  }
+}

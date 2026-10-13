@@ -1,0 +1,66 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - run: npm ci
+      - run: npm audit
+      - run: npm audit --omit=dev
+      - run: npm test
+      - run: npm run test:server
+      - run: npm run test:server:business
+      - run: npm run test:server:phase3
+      - run: npm run test:server:phase4
+      - run: npm run test:server:phase5
+      - run: npm run test:pdf:phase6
+      - run: npm run test:server:phase7
+      - run: npm run test:server:host-caddy
+      - run: npm run test:server:multi-user
+      - name: Prepare isolated TEST container environment
+        run: |
+          printf 'NODE_ENV=test\nHOST=0.0.0.0\nPORT=3000\nDOMAIN=invoice.example.com\nAPP_ORIGIN=http://localhost:18080\nDATABASE_PATH=/app/data/foreign-trade.sqlite\nBUSINESS_BACKUP_LIMIT=64mb\nSESSION_SECRET=%s\nTRUST_PROXY_HOPS=1\n' "$(openssl rand -hex 48)" > .env
+          chmod 600 .env
+      - name: Validate Compose configuration
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.host-caddy.yml config --quiet
+          docker compose -f docker-compose.yml -f tests/deploy/docker-compose.test.yml config --quiet
+      - run: docker build -t foreign-trade-invoice-generator:test .
+      - name: Verify PDF dependencies and regression in Production image
+        run: |
+          versions="$(docker run --rm --entrypoint node foreign-trade-invoice-generator:test -e "console.log(require('/app/node_modules/jspdf/package.json').version + ' ' + require('/app/node_modules/jspdf-autotable/package.json').version)")"
+          test "$versions" = "4.2.1 5.0.8"
+          docker run --rm --entrypoint node \
+            -v "$GITHUB_WORKSPACE/tests:/app/tests:ro" \
+            foreign-trade-invoice-generator:test \
+            /app/tests/pdf-dependency-regression.js /tmp/phase6-pdfs
+      - name: Isolated container persistence smoke test
+        run: tests/deploy/container-smoke.sh
+      - name: Phase 7 real updater fault-injection test
+        run: tests/deploy/phase7-update-smoke.sh
+      - name: Prepare Existing Host Caddy TEST environment
+        run: |
+          printf 'NODE_ENV=test\nHOST=0.0.0.0\nPORT=3000\nDOMAIN=invoice.example.com\nAPP_ORIGIN=http://127.0.0.1:3001\nDEPLOYMENT_MODE=EXISTING_HOST_CADDY\nDATABASE_PATH=/app/data/foreign-trade.sqlite\nBUSINESS_BACKUP_LIMIT=64mb\nSESSION_SECRET=%s\nTRUST_PROXY_HOPS=1\n' "$(openssl rand -hex 48)" > .env
+          chmod 600 .env
+      - name: Existing Host Caddy real app-only workflow
+        run: tests/deploy/host-caddy-container-smoke.sh
+      - name: Production enterprise multi-user app-only workflow
+        run: tests/deploy/multi-user-container-smoke.sh
+      - name: Production schema v3 to v4 updater migration and rollback
+        run: tests/deploy/multi-user-update-smoke.sh

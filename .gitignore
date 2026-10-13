@@ -1,0 +1,55 @@
+# Operating system
+.DS_Store
+._*
+
+# Dependencies and local tooling
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local exports, backups, databases, and temporary files
+backups/
+backup/
+exports/
+export/
+temp/
+tmp/
+*.tmp
+*.bak
+*.backup
+*.sqlite
+*.sqlite3
+*.db
+data/
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Certificates and private keys
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+
+# Deployment-generated database backups
+deploy/backups/
+
+# Generated documents and test artifacts
+*.pdf
+output/
+
+# Local data-bearing test scripts; keep production business logic out of Git
+tests/generate-production-draft-pi-from-backup.js
+tests/generate-production-final-pi-from-backup.js

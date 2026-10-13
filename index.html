@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>外贸单据生成器</title>
+  <link rel="stylesheet" href="css/styles.css?v=20260720-packing-flow">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">FT</span><div><strong>外贸单据</strong><small>服务器工作台</small></div></div>
+      <nav id="main-nav" aria-label="主导航">
+        <div class="nav-group"><span class="nav-group-label">WORKFLOW</span><button data-page="dashboard" class="active"><span>⌂</span>首页仪表盘</button><button data-page="orders"><span>▤</span>订单管理</button><button data-page="preview"><span>▣</span>单据预览</button></div>
+        <div class="nav-group"><span class="nav-group-label">MASTER DATA</span><button data-page="customers"><span>♙</span>客户管理</button><button data-page="products"><span>◇</span>产品管理</button><button data-page="company"><span>⚙</span>公司设置</button></div>
+        <div class="nav-group"><span class="nav-group-label">DATA SAFETY</span><button data-page="backup"><span>↕</span>数据备份</button></div>
+        <div class="nav-group"><span class="nav-group-label">ACCOUNT</span><button data-page="users" data-admin-only><span>♙</span>用户管理</button><button data-page="audit" data-admin-label="操作日志" data-employee-label="我的活动"><span>≡</span>操作日志</button><button data-page="account"><span>◎</span>我的账号</button></div>
+        <div class="nav-group"><span class="nav-group-label">HELP</span><button data-page="help"><span>?</span>使用帮助</button></div>
+      </nav>
+      <div class="local-badge"><span class="status-dot"></span><div><strong>服务器模式</strong><small>SQLite 安全存储</small></div></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><button id="menu-toggle" class="icon-btn" aria-label="打开菜单">☰</button><div><h1 id="page-title">首页仪表盘</h1><p id="page-subtitle">掌握订单、收款与交付状态</p></div><div class="top-actions"><span id="account-summary" class="account-summary"></span><span id="save-state" class="save-state">✓ 数据已保存</span><button class="btn primary" data-action="new-order">＋ 新建订单</button></div></header>
+      <section id="page-content" class="page-content" aria-live="polite"></section>
+    </main>
+  </div>
+  <div id="modal" class="modal-backdrop hidden" role="dialog" aria-modal="true"><div class="modal"><div class="modal-head"><h2 id="modal-title"></h2><button class="icon-btn" data-close-modal aria-label="关闭">×</button></div><div id="modal-body" class="modal-body"></div></div></div>
+  <div id="toast-area" class="toast-area" aria-live="assertive"></div>
+  <input id="hidden-file" type="file" hidden>
+  <script src="node_modules/jspdf/dist/jspdf.umd.min.js"></script>
+  <script src="node_modules/jspdf-autotable/dist/jspdf.plugin.autotable.min.js"></script>
+  <script src="node_modules/jszip/dist/jszip.min.js"></script>
+  <script src="js/core.js?v=20260720-packing-flow"></script>
+  <script src="js/api-db.js?v=20260907-server-data"></script>
+  <script src="js/sample-data.js?v=20260718-order-stages"></script>
+  <script src="js/pdf.js?v=20260720-packing-flow"></script>
+  <script src="js/app.js?v=20260720-packing-flow"></script>
+</body>
+</html>
