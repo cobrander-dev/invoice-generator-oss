@@ -1,7 +1,23 @@
 'use strict';
-const { ValidationError, NotFoundError, ConflictError } = require('../db/errors');
-const { isAdmin, requireOwned } = require('../auth/authorization');
+const {
+  ValidationError,
+  NotFoundError,
+  ConflictError,
+  DeletionBlockedError,
+} = require('../db/errors');
+const { isAdmin, requireAdmin, requireOwned } = require('../auth/authorization');
 const { requireNewRecordId } = require('./input-policy');
+const {
+  deletionBlockers,
+  paymentAccountBlockers,
+  recordLabel,
+  blockedMessage,
+} = require('./deletion-policy');
+
+// Records with a lifecycle: they can be archived (orders: voided), restored and,
+// when nothing depends on them, permanently deleted.
+const LIFECYCLE_REPOSITORIES = Object.freeze(['customers', 'products', 'orders']);
+const PERMANENT_DELETE_CONFIRMATION = '永久删除';
 
 const SYSTEM_ACTOR = Object.freeze({
   id: null,
@@ -65,10 +81,14 @@ class BusinessCrudService {
       throw new ConflictError('Archived or void records are read-only');
     return row;
   }
-  list(repository, actor, { includeInactive = false } = {}) {
+  list(repository, actor, { includeInactive = false, archived = false } = {}) {
     actor = this.actor(actor);
     const owner = this.owned(repository) && !isAdmin(actor) ? actor.id : undefined;
-    return this.repositories[repository].listVisible(owner, { includeInactive });
+    if (archived && !LIFECYCLE_REPOSITORIES.includes(repository)) return [];
+    return this.repositories[repository].listVisible(owner, {
+      includeInactive,
+      onlyInactive: archived,
+    });
   }
   createInside(repository, record, actor, ownerUserId) {
     actor = this.actor(actor);
@@ -109,6 +129,7 @@ class BusinessCrudService {
       throw new NotFoundError('Record not found');
     }
     if (current.rowVersion !== version) throw new ConflictError();
+    if (repository === 'company') this.requireRemovableAccounts(current.payload, record);
     if (repository === 'orders' && this.orderOperationService) {
       const customer = requireOwned(this.repositories.customers.get(record.customerId), actor);
       if (customer.owner_user_id !== current.owner_user_id)
@@ -134,6 +155,60 @@ class BusinessCrudService {
   remove(repository, id, expectedVersion, actor) {
     return this.archive(repository, id, expectedVersion, actor);
   }
+  restore(repository, id, expectedVersion, actor) {
+    const row = this.requireLifecycleRecord(repository, id, actor),
+      version = requireExpectedVersion(expectedVersion);
+    if ((row.lifecycle_state || 'ACTIVE') === 'ACTIVE')
+      throw new ConflictError('Record is not archived or void');
+    if (row.rowVersion !== version) throw new ConflictError();
+    return this.repositories[repository].setMetadata(
+      id,
+      { lifecycle_state: 'ACTIVE' },
+      { incrementVersion: true },
+    );
+  }
+  // Products are shared by every user, so only the administrator may delete one permanently.
+  requireLifecycleRecord(repository, id, actor, { permanent = false } = {}) {
+    actor = this.actor(actor);
+    if (!LIFECYCLE_REPOSITORIES.includes(repository)) throw new NotFoundError('Record not found');
+    if (permanent && repository === 'products') requireAdmin(actor);
+    const row = this.get(repository, id, actor);
+    if (!row) throw new NotFoundError('Record not found');
+    return row;
+  }
+  deletionCheck(repository, id, actor) {
+    const row = this.requireLifecycleRecord(repository, id, actor, { permanent: true }),
+      blockers = deletionBlockers(this.db, repository, row);
+    return { id: row.payload.id, deletable: !blockers.length, blockers };
+  }
+  // Must run inside the caller's transaction (the audit write) so the checks and the
+  // deletion see the same data.
+  permanentlyDelete(repository, id, expectedVersion, confirmation, actor) {
+    if (confirmation !== PERMANENT_DELETE_CONFIRMATION)
+      throw new ValidationError('Permanent deletion confirmation phrase is invalid');
+    const row = this.requireLifecycleRecord(repository, id, actor, { permanent: true }),
+      version = requireExpectedVersion(expectedVersion);
+    if (row.rowVersion !== version) throw new ConflictError();
+    const blockers = deletionBlockers(this.db, repository, row);
+    if (blockers.length) throw new DeletionBlockedError(blockers, blockedMessage(blockers));
+    this.repositories[repository].delete(id, row.rowVersion);
+    return { id: row.payload.id, label: recordLabel(repository, row.payload) };
+  }
+  // A payment account that an order still uses cannot be removed from the company profile.
+  requireRemovableAccounts(before = {}, after = {}) {
+    const ids = (company) =>
+      new Set(
+        (Array.isArray(company.accounts) ? company.accounts : [])
+          .map((account) => account?.id)
+          .filter((value) => typeof value === 'string' && value),
+      );
+    const kept = ids(after);
+    for (const id of ids(before)) {
+      if (kept.has(id)) continue;
+      const blockers = paymentAccountBlockers(this.db, id);
+      if (blockers.length) throw new DeletionBlockedError(blockers, blockedMessage(blockers));
+    }
+  }
   removeOrder(id, expectedVersion, actor) {
     return this.archive('orders', id, expectedVersion, actor);
   }
@@ -144,4 +219,11 @@ class BusinessCrudService {
   }
 }
 
-module.exports = { BusinessCrudService, requireExpectedVersion, requireRecord, SYSTEM_ACTOR };
+module.exports = {
+  BusinessCrudService,
+  requireExpectedVersion,
+  requireRecord,
+  SYSTEM_ACTOR,
+  LIFECYCLE_REPOSITORIES,
+  PERMANENT_DELETE_CONFIRMATION,
+};

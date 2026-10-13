@@ -40,6 +40,16 @@
         this.name = 'ServerError';
       }
     };
+  // A permanent deletion refused because other records still depend on the record.
+  const DeleteBlockedError =
+    sharedErrors?.DeleteBlockedError ||
+    class DeleteBlockedError extends ApiError {
+      constructor(message = '该记录仍被其他业务资料使用，无法永久删除。', blockers = []) {
+        super(message, 409);
+        this.name = 'DeleteBlockedError';
+        this.blockers = blockers;
+      }
+    };
   const NetworkError =
     sharedErrors?.NetworkError ||
     class NetworkError extends ApiError {
@@ -58,6 +68,7 @@
     meta: '/api/meta',
     restorePoints: '/api/server-backup/restore-point',
   });
+  const lifecycleStores = new Set(['customers', 'products', 'orders']);
   const versions = new Map();
   const metadata = new Map();
   let csrfToken = '';
@@ -122,6 +133,8 @@
       payload = await response.json();
     } catch {}
     if (response.status === 401) throw new AuthExpiredError();
+    if (response.status === 409 && payload.code === 'DELETE_BLOCKED')
+      throw new DeleteBlockedError(payload.error, payload.blockers || []);
     if (response.status === 409) throw new ConflictError(payload.error);
     if ([400, 403, 404, 422].includes(response.status))
       throw new ApiError(payload.error || '业务数据未通过服务器校验。', response.status);
@@ -164,6 +177,22 @@
   function ensureStore(store) {
     if (!paths[store]) throw new ApiError(`Unsupported server store: ${store}`, 400);
   }
+  function ensureLifecycleStore(store) {
+    if (!lifecycleStores.has(store))
+      throw new ApiError(`Unsupported lifecycle store: ${store}`, 400);
+  }
+  async function lifecycleAction(store, id, action) {
+    ensureLifecycleStore(store);
+    const version = versions.get(key(store, id));
+    if (version === undefined)
+      throw new ConflictError('缺少服务器记录版本，请重新加载最新数据后再处理。');
+    const response = await request(`${recordPath(store, id)}/${action}`, {
+      method: 'POST',
+      body: {},
+      headers: { 'If-Match': String(version) },
+    });
+    return remember(store, response.data, response.meta);
+  }
   async function orderAction(id, action, body = {}) {
     const version = versions.get(key('orders', id));
     if (version === undefined) throw new ConflictError('缺少服务器订单版本，请重新加载后再执行。');
@@ -199,7 +228,14 @@
   }
 
   const api = {
-    errors: { ApiError, ConflictError, AuthExpiredError, ServerError, NetworkError },
+    errors: {
+      ApiError,
+      ConflictError,
+      AuthExpiredError,
+      ServerError,
+      NetworkError,
+      DeleteBlockedError,
+    },
     async open() {
       currentUser = await request('/api/auth/me');
       return currentUser;
@@ -214,11 +250,13 @@
         throw err;
       }
     },
-    async getAll(store) {
+    async getAll(store, { archived = false } = {}) {
       ensureStore(store);
       if (['company', 'meta', 'restorePoints'].includes(store))
         throw new ApiError(`getAll is not available for ${store}`, 400);
-      const response = await request(paths[store]);
+      if (archived && !lifecycleStores.has(store))
+        throw new ApiError(`${store} has no archived view`, 400);
+      const response = await request(archived ? `${paths[store]}?view=archived` : paths[store]);
       return remember(store, response.data, response.meta);
     },
     async put(store, data, options = {}) {
@@ -255,6 +293,31 @@
         headers: { 'If-Match': String(version) },
       });
       return remember(store, response.data, response.meta);
+    },
+    // Archive (orders: void) keeps the record; restore makes it active again.
+    archive(store, id) {
+      return lifecycleAction(store, id, 'archive');
+    },
+    restore(store, id) {
+      return lifecycleAction(store, id, 'restore');
+    },
+    async deletionCheck(store, id) {
+      ensureLifecycleStore(store);
+      return (await request(`${recordPath(store, id)}/deletion-check`)).data;
+    },
+    async permanentDelete(store, id, confirmation) {
+      ensureLifecycleStore(store);
+      const version = versions.get(key(store, id));
+      if (version === undefined)
+        throw new ConflictError('缺少服务器记录版本，未执行删除。请重新加载最新数据后再处理。');
+      const response = await request(`${recordPath(store, id)}/permanent-delete`, {
+        method: 'POST',
+        body: { confirmation },
+        headers: { 'If-Match': String(version) },
+      });
+      versions.delete(key(store, id));
+      metadata.delete(key(store, id));
+      return response.data;
     },
     async putMany(store, items) {
       if (store !== 'products') throw new ApiError('Only product bulk import is supported', 400);

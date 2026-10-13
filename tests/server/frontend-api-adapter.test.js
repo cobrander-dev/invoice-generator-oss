@@ -9,6 +9,7 @@ const {
   AuthExpiredError,
   ServerError,
   NetworkError,
+  DeleteBlockedError,
 } = require('../../js/api-db.js');
 
 const response = (status, body = {}) =>
@@ -72,6 +73,66 @@ test('adapter DELETE requires cached version and retains archived server metadat
   assert.equal(s.calls[2].options.headers['If-Match'], '2');
   assert.equal(s.db._testing.versions.get('customers\0c1'), 3);
   assert.equal(s.db.getMetadata('customers', 'c1').lifecycleState, 'ARCHIVED');
+});
+test('adapter lists archived records, archives and restores with If-Match', async () => {
+  const s = scripted(
+    response(200, {
+      data: [{ id: 'c1' }],
+      meta: { rowVersions: { c1: 4 }, lifecycle: { c1: 'ARCHIVED' } },
+    }),
+    csrf,
+    response(200, { data: { id: 'c1' }, meta: { rowVersion: 5, lifecycleState: 'ACTIVE' } }),
+    response(200, { data: { id: 'c1' }, meta: { rowVersion: 6, lifecycleState: 'ARCHIVED' } }),
+  );
+  await s.db.getAll('customers', { archived: true });
+  assert.equal(s.calls[0].url, '/api/customers?view=archived');
+  assert.equal(s.db.getMetadata('customers', 'c1').lifecycleState, 'ARCHIVED');
+  await s.db.restore('customers', 'c1');
+  assert.equal(s.calls[2].url, '/api/customers/c1/restore');
+  assert.equal(s.calls[2].options.method, 'POST');
+  assert.equal(s.calls[2].options.headers['If-Match'], '4');
+  await s.db.archive('customers', 'c1');
+  assert.equal(s.calls[3].url, '/api/customers/c1/archive');
+  assert.equal(s.calls[3].options.headers['If-Match'], '5');
+  assert.equal(s.db.getMetadata('customers', 'c1').lifecycleState, 'ARCHIVED');
+  await assert.rejects(s.db.getAll('packingLists', { archived: true }), /no archived view/);
+});
+test('adapter permanent delete sends the confirmation and forgets the record', async () => {
+  const s = scripted(
+    response(200, { data: [{ id: 'p1' }], meta: { rowVersions: { p1: 2 } } }),
+    response(200, { data: { id: 'p1', deletable: true, blockers: [] } }),
+    csrf,
+    response(200, { data: { id: 'p1' }, meta: { deleted: true } }),
+  );
+  await s.db.getAll('products');
+  assert.deepEqual(await s.db.deletionCheck('products', 'p1'), {
+    id: 'p1',
+    deletable: true,
+    blockers: [],
+  });
+  assert.equal(s.calls[1].url, '/api/products/p1/deletion-check');
+  assert.deepEqual(await s.db.permanentDelete('products', 'p1', '永久删除'), { id: 'p1' });
+  assert.equal(s.calls[3].url, '/api/products/p1/permanent-delete');
+  assert.equal(s.calls[3].options.headers['If-Match'], '2');
+  assert.deepEqual(JSON.parse(s.calls[3].options.body), { confirmation: '永久删除' });
+  assert.equal(s.db._testing.versions.has('products\0p1'), false);
+  await assert.rejects(s.db.permanentDelete('products', 'p1', '永久删除'), ConflictError);
+});
+test('a blocked permanent delete becomes DeleteBlockedError with its blockers', async () => {
+  const blockers = [{ code: 'CUSTOMER_HAS_ORDERS', count: 2, message: '已有 2 个订单使用该客户' }];
+  const s = scripted(
+    response(200, { data: [{ id: 'c1' }], meta: { rowVersions: { c1: 1 } } }),
+    csrf,
+    response(409, { error: '无法永久删除', code: 'DELETE_BLOCKED', blockers }),
+  );
+  await s.db.getAll('customers');
+  await assert.rejects(s.db.permanentDelete('customers', 'c1', '永久删除'), (err) => {
+    assert.ok(err instanceof DeleteBlockedError);
+    assert.equal(err.status, 409);
+    assert.deepEqual(err.blockers, blockers);
+    return true;
+  });
+  assert.equal(s.db._testing.versions.get('customers\0c1'), 1);
 });
 test('409 becomes ConflictError and is never automatically retried', async () => {
   const s = scripted(

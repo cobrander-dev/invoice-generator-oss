@@ -31,4 +31,19 @@ class ForbiddenError extends Error {
     this.expose = true;
   }
 }
-module.exports = { ConflictError, ValidationError, NotFoundError, ForbiddenError };
+// A permanent deletion refused because other business records still depend on the record.
+class DeletionBlockedError extends ConflictError {
+  constructor(blockers, message = 'Record is still referenced by other business records') {
+    super(message);
+    this.name = 'DeletionBlockedError';
+    this.code = 'DELETE_BLOCKED';
+    this.blockers = blockers;
+  }
+}
+module.exports = {
+  ConflictError,
+  ValidationError,
+  NotFoundError,
+  ForbiddenError,
+  DeletionBlockedError,
+};

@@ -119,15 +119,18 @@ class BusinessRepository {
     this.db.prepare(`UPDATE ${this.table} SET ${assignments}${version} WHERE id=?`).run(...args);
     return this.get(id);
   }
-  listVisible(ownerUserId, { includeInactive = false } = {}) {
+  listVisible(ownerUserId, { includeInactive = false, onlyInactive = false } = {}) {
     const ownerClause =
       ownerUserId === undefined || !this.metadata.includes('owner_user_id')
         ? ''
         : ' AND owner_user_id=?';
-    const lifecycleClause =
-      includeInactive || !this.metadata.includes('lifecycle_state')
-        ? ''
-        : " AND lifecycle_state='ACTIVE'";
+    const lifecycleClause = !this.metadata.includes('lifecycle_state')
+      ? ''
+      : onlyInactive
+        ? " AND lifecycle_state<>'ACTIVE'"
+        : includeInactive
+          ? ''
+          : " AND lifecycle_state='ACTIVE'";
     const metadataColumns = this.metadata.length ? `, ${this.metadata.join(', ')}` : '';
     const rows = this.db
       .prepare(

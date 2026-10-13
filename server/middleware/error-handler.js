@@ -13,6 +13,10 @@ function errorHandler(err, req, res, next) {
     : status === 500
       ? '服务器暂时不可用'
       : '请求格式或大小无效';
-  res.status(status).json({ error: message });
+  const body = { error: message };
+  // Only deliberately exposed application errors may add a machine-readable code and details.
+  if (err.expose && typeof err.code === 'string') body.code = err.code;
+  if (err.expose && Array.isArray(err.blockers)) body.blockers = err.blockers;
+  res.status(status).json(body);
 }
 module.exports = { errorHandler };

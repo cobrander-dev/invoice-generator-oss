@@ -81,8 +81,14 @@ function createBusinessCrudRoutes(service, backupService, ownershipService, audi
     ['products', 'products'],
     ['orders', 'orders'],
   ]) {
+    const subject = repository.slice(0, -1).toUpperCase();
+    // ?view=archived lists archived customers/products and void orders instead of active ones.
     router.get(`/${path}`, (req, res) =>
-      res.json(listResponse(service.list(repository, req.user))),
+      res.json(
+        listResponse(
+          service.list(repository, req.user, { archived: req.query?.view === 'archived' }),
+        ),
+      ),
     );
     router.get(`/${path}/:id`, (req, res) =>
       sendRecord(res, service.get(repository, req.params.id, req.user)),
@@ -124,9 +130,10 @@ function createBusinessCrudRoutes(service, backupService, ownershipService, audi
         ),
       ),
     );
-    router.delete(`/${path}/:id`, (req, res) => {
-      const action =
-        repository === 'orders' ? 'VOID_ORDER' : `ARCHIVE_${repository.slice(0, -1).toUpperCase()}`;
+    // Archive (orders: void) keeps the record and its history. DELETE stays an alias of
+    // archive for existing clients; permanent deletion has its own explicit endpoint.
+    const archive = (req, res) => {
+      const action = repository === 'orders' ? 'VOID_ORDER' : `ARCHIVE_${subject}`;
       const removed = auditService.perform(
         entry(req, action, repository.toUpperCase(), req.params.id),
         () =>
@@ -135,6 +142,41 @@ function createBusinessCrudRoutes(service, backupService, ownershipService, audi
             : service.remove(repository, req.params.id, expectedVersion(req), req.user),
       );
       res.json(recordResponse(removed));
+    };
+    router.post(`/${path}/:id/archive`, archive);
+    router.delete(`/${path}/:id`, archive);
+    router.post(`/${path}/:id/restore`, (req, res) =>
+      res.json(
+        recordResponse(
+          auditService.perform(
+            entry(req, `RESTORE_${subject}`, repository.toUpperCase(), req.params.id),
+            () => service.restore(repository, req.params.id, expectedVersion(req), req.user),
+          ),
+        ),
+      ),
+    );
+    router.get(`/${path}/:id/deletion-check`, (req, res) =>
+      res.json({ data: service.deletionCheck(repository, req.params.id, req.user) }),
+    );
+    router.post(`/${path}/:id/permanent-delete`, (req, res) => {
+      const audit = entry(
+        req,
+        `PERMANENT_DELETE_${subject}`,
+        repository.toUpperCase(),
+        req.params.id,
+      );
+      const deleted = auditService.performMany([audit], () => {
+        const result = service.permanentlyDelete(
+          repository,
+          req.params.id,
+          expectedVersion(req),
+          req.body?.confirmation,
+          req.user,
+        );
+        audit.metadata = { label: result.label };
+        return result;
+      });
+      res.json({ data: { id: deleted.id }, meta: { deleted: true } });
     });
   }
 
