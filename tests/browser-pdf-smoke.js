@@ -13,10 +13,10 @@
       autoTableLoaded: typeof doc.autoTable === 'function',
       pages: doc.getNumberOfPages(),
       bytes: doc.output('arraybuffer').byteLength,
-      textPresent: doc.internal.pages.flat().join('\n').includes('PHASE 6 TEST PDF')
+      textPresent: doc.internal.pages.flat().join('\n').includes('PHASE 6 TEST PDF'),
     };
     result.textContent = JSON.stringify(payload);
   } catch (error) {
     result.textContent = JSON.stringify({ status: 'FAIL', message: error.message });
   }
-}());
+})();

@@ -13,7 +13,7 @@ const { createBusinessRepositories } = require('../../server/repositories/busine
 const { fixture } = require('./helpers');
 
 const root = path.resolve(__dirname, '../..');
-const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const dockerfile = read('Dockerfile');
 const compose = read('docker-compose.yml');
 const caddy = read('deploy/caddy/Caddyfile');
@@ -34,8 +34,13 @@ test('application image runs as non-root and has a writable data mount point', (
 });
 test('Docker build copies only explicit runtime application files', () => {
   assert.doesNotMatch(dockerfile, /COPY\s+\.\s+\./);
-  for (const required of ['server', 'js/api-db.js', 'js/core.js', 'css']) assert.match(dockerfile, new RegExp(required.replace('/', '\\/')));
-  for (const forbidden of ['tests', 'js/db.js', '.env', '.git']) assert.doesNotMatch(dockerfile, new RegExp(`COPY[^\\n]*${forbidden.replace('.', '\\.').replace('/', '\\/')}`));
+  for (const required of ['server', 'js/api-db.js', 'js/core.js', 'css'])
+    assert.match(dockerfile, new RegExp(required.replace('/', '\\/')));
+  for (const forbidden of ['tests', 'js/db.js', '.env', '.git'])
+    assert.doesNotMatch(
+      dockerfile,
+      new RegExp(`COPY[^\\n]*${forbidden.replace('.', '\\.').replace('/', '\\/')}`),
+    );
 });
 test('Compose app has no public port and uses a persistent SQLite volume', () => {
   const app = compose.slice(compose.indexOf('  app:'), compose.indexOf('  caddy:'));
@@ -64,18 +69,55 @@ test('Caddy is the only public entry and proxies to the app service', () => {
 });
 test('production configuration fails fast without origin, database or secret', () => {
   const secret = randomBytes(48).toString('hex');
-  assert.throws(() => loadConfig({ NODE_ENV: 'production', DATABASE_PATH: '/tmp/test.sqlite', SESSION_SECRET: secret }), /HTTPS APP_ORIGIN/);
-  assert.throws(() => loadConfig({ NODE_ENV: 'production', APP_ORIGIN: 'https://invoice.example.invalid', SESSION_SECRET: secret }), /DATABASE_PATH/);
-  assert.throws(() => loadConfig({ NODE_ENV: 'production', APP_ORIGIN: 'https://invoice.example.invalid', DATABASE_PATH: '/tmp/test.sqlite' }), /SESSION_SECRET/);
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: 'production',
+        DATABASE_PATH: '/tmp/test.sqlite',
+        SESSION_SECRET: secret,
+      }),
+    /HTTPS APP_ORIGIN/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: 'production',
+        APP_ORIGIN: 'https://invoice.example.invalid',
+        SESSION_SECRET: secret,
+      }),
+    /DATABASE_PATH/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: 'production',
+        APP_ORIGIN: 'https://invoice.example.invalid',
+        DATABASE_PATH: '/tmp/test.sqlite',
+      }),
+    /SESSION_SECRET/,
+  );
 });
 test('production configuration accepts one reverse proxy hop only', () => {
-  const env = { NODE_ENV: 'production', APP_ORIGIN: 'https://invoice.example.invalid', DATABASE_PATH: '/tmp/test.sqlite', SESSION_SECRET: randomBytes(48).toString('hex'), TRUST_PROXY_HOPS: '1' };
+  const env = {
+    NODE_ENV: 'production',
+    APP_ORIGIN: 'https://invoice.example.invalid',
+    DATABASE_PATH: '/tmp/test.sqlite',
+    SESSION_SECRET: randomBytes(48).toString('hex'),
+    TRUST_PROXY_HOPS: '1',
+  };
   assert.equal(loadConfig(env).trustProxy, 1);
   assert.throws(() => loadConfig({ ...env, TRUST_PROXY_HOPS: '2' }), /exactly 1/);
 });
 test('environment template contains placeholders but no administrator password', () => {
   const env = read('.env.example');
-  for (const key of ['NODE_ENV=production', 'DOMAIN=invoice.example.com', 'APP_ORIGIN=https://invoice.example.com', 'DATABASE_PATH=/app/data/', 'SESSION_SECRET=change-me']) assert.match(env, new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  for (const key of [
+    'NODE_ENV=production',
+    'DOMAIN=invoice.example.com',
+    'APP_ORIGIN=https://invoice.example.com',
+    'DATABASE_PATH=/app/data/',
+    'SESSION_SECRET=change-me',
+  ])
+    assert.match(env, new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.doesNotMatch(env, /ADMIN_PASSWORD|GITHUB_TOKEN|BEGIN PRIVATE KEY/);
 });
 test('health endpoint is public and returns only status ok', async () => {
@@ -84,14 +126,18 @@ test('health endpoint is public and returns only status ok', async () => {
     const response = await f.client().request('/health');
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { status: 'ok' });
-  } finally { await f.cleanup(); }
+  } finally {
+    await f.cleanup();
+  }
 });
 test('business page and API remain protected by login', async () => {
   const f = await fixture();
   try {
     assert.equal((await f.client().request('/')).status, 302);
     assert.equal((await f.client().request('/api/orders')).status, 401);
-  } finally { await f.cleanup(); }
+  } finally {
+    await f.cleanup();
+  }
 });
 test('administrator password can be supplied through stdin without persistence or output', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-phase5-admin-'));
@@ -99,9 +145,14 @@ test('administrator password can be supplied through stdin without persistence o
   const password = 'TEST-stdin-passphrase-0000';
   const result = spawnSync(process.execPath, ['server/scripts/init-admin.js'], {
     cwd: root,
-    env: { ...process.env, DATABASE_PATH: databasePath, ADMIN_USERNAME: 'test-stdin-admin', ADMIN_PASSWORD_STDIN: '1' },
+    env: {
+      ...process.env,
+      DATABASE_PATH: databasePath,
+      ADMIN_USERNAME: 'test-stdin-admin',
+      ADMIN_PASSWORD_STDIN: '1',
+    },
     input: password,
-    encoding: 'utf8'
+    encoding: 'utf8',
   });
   try {
     assert.equal(result.status, 0, result.stderr);
@@ -112,31 +163,63 @@ test('administrator password can be supplied through stdin without persistence o
       assert.equal(row.username, 'test-stdin-admin');
       assert.match(row.password_hash, /^\$argon2id\$/);
       assert.doesNotMatch(row.password_hash, /TEST-stdin-passphrase/);
-    } finally { db.close(); }
-  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+    } finally {
+      db.close();
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 test('SQLite backup helper creates a restorable consistent database copy', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-phase5-backup-'));
-  const source = path.join(directory, 'foreign-trade.sqlite'), destination = path.join(directory, 'backups', 'test.sqlite');
+  const source = path.join(directory, 'foreign-trade.sqlite'),
+    destination = path.join(directory, 'backups', 'test.sqlite');
   const db = openDatabase(source);
-  createBusinessRepositories(db).customers.put({ id: 'test-customer', buyerName: 'Example Backup Testing Ltd.' }, 0);
+  createBusinessRepositories(db).customers.put(
+    { id: 'test-customer', buyerName: 'Example Backup Testing Ltd.' },
+    0,
+  );
   db.close();
-  const result = spawnSync(process.execPath, ['server/scripts/backup-database.js'], { cwd: root, env: { ...process.env, DATABASE_PATH: source, BACKUP_PATH: destination }, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['server/scripts/backup-database.js'], {
+    cwd: root,
+    env: { ...process.env, DATABASE_PATH: source, BACKUP_PATH: destination },
+    encoding: 'utf8',
+  });
   try {
     assert.equal(result.status, 0, result.stderr);
     const copy = new Database(destination, { readonly: true });
-    try { assert.equal(JSON.parse(copy.prepare('SELECT payload_json FROM customers WHERE id=?').get('test-customer').payload_json).buyerName, 'Example Backup Testing Ltd.'); }
-    finally { copy.close(); }
+    try {
+      assert.equal(
+        JSON.parse(
+          copy.prepare('SELECT payload_json FROM customers WHERE id=?').get('test-customer')
+            .payload_json,
+        ).buyerName,
+        'Example Backup Testing Ltd.',
+      );
+    } finally {
+      copy.close();
+    }
     assert.equal(fs.statSync(destination).mode & 0o777, 0o600);
-  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 test('SQLite backup helper rejects a destination outside persistent data', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-phase5-boundary-'));
-  const source = path.join(directory, 'data', 'foreign-trade.sqlite'), outside = path.join(directory, 'outside.sqlite');
+  const source = path.join(directory, 'data', 'foreign-trade.sqlite'),
+    outside = path.join(directory, 'outside.sqlite');
   openDatabase(source).close();
-  const result = spawnSync(process.execPath, ['server/scripts/backup-database.js'], { cwd: root, env: { ...process.env, DATABASE_PATH: source, BACKUP_PATH: outside }, encoding: 'utf8' });
-  try { assert.notEqual(result.status, 0); assert.equal(fs.existsSync(outside), false); }
-  finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  const result = spawnSync(process.execPath, ['server/scripts/backup-database.js'], {
+    cwd: root,
+    env: { ...process.env, DATABASE_PATH: source, BACKUP_PATH: outside },
+    encoding: 'utf8',
+  });
+  try {
+    assert.notEqual(result.status, 0);
+    assert.equal(fs.existsSync(outside), false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 test('installer is idempotent around env, secret and administrator state', () => {
   assert.match(install, /apt-get install -y ca-certificates curl git openssl openssh-client/);
@@ -159,21 +242,34 @@ test('updater backs up before fetch and permits fast-forward updates only', () =
 });
 test('deployment scripts never destroy volumes, prune Docker or reset credentials', () => {
   const scripts = [install, update, read('deploy/backup.sh')].join('\n');
-  for (const forbidden of ['down -v', 'volume prune', 'system prune', 'ADMIN_PASSWORD=admin', 'SESSION_SECRET=change-me']) assert.doesNotMatch(scripts, new RegExp(forbidden, 'i'));
+  for (const forbidden of [
+    'down -v',
+    'volume prune',
+    'system prune',
+    'ADMIN_PASSWORD=admin',
+    'SESSION_SECRET=change-me',
+  ])
+    assert.doesNotMatch(scripts, new RegExp(forbidden, 'i'));
 });
 test('updater retains rollback image and pre-update database backup on failure', () => {
-  assert.match(update, /candidate-/); assert.match(update, /APP_IMAGE_TAG=current/);
-  assert.match(update, /pre-update-/); assert.match(update, /backup.*preserved/i);
+  assert.match(update, /candidate-/);
+  assert.match(update, /APP_IMAGE_TAG=current/);
+  assert.match(update, /pre-update-/);
+  assert.match(update, /backup.*preserved/i);
   assert.doesNotMatch(update, /new_head.*old_head.*exit 0/);
 });
 test('deployment scripts pass bash syntax and built-in validation', () => {
-  for (const script of ['deploy/install.sh', 'deploy/update.sh', 'deploy/backup.sh']) assert.equal(spawnSync('bash', ['-n', script], { cwd: root }).status, 0);
+  for (const script of ['deploy/install.sh', 'deploy/update.sh', 'deploy/backup.sh'])
+    assert.equal(spawnSync('bash', ['-n', script], { cwd: root }).status, 0);
   assert.equal(spawnSync('bash', ['deploy/install.sh', '--check'], { cwd: root }).status, 0);
   assert.equal(spawnSync('bash', ['deploy/update.sh', '--check'], { cwd: root }).status, 0);
 });
 test('git and Docker ignore files protect runtime data, secrets and certificates', () => {
-  for (const text of [gitignore, dockerignore]) for (const token of ['.env', 'node_modules', '*.pdf', '*.sqlite', '*.key', '*.pem']) assert.match(text, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  for (const token of ['tests', '.git', 'output', 'tmp']) assert.match(dockerignore, new RegExp(`^${token}$`, 'm'));
+  for (const text of [gitignore, dockerignore])
+    for (const token of ['.env', 'node_modules', '*.pdf', '*.sqlite', '*.key', '*.pem'])
+      assert.match(text, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  for (const token of ['tests', '.git', 'output', 'tmp'])
+    assert.match(dockerignore, new RegExp(`^${token}$`, 'm'));
 });
 test('server frontend adapter has no IndexedDB or localStorage business fallback', () => {
   const source = read('js/api-db.js');

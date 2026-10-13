@@ -1,15 +1,132 @@
 'use strict';
-const fs=require('fs');
-const path=require('path');
-global.window=global;
-const C=require('../js/core.js');
-global.jspdf=require('jspdf');
+const fs = require('fs');
+const path = require('path');
+global.window = global;
+const C = require('../js/core.js');
+global.jspdf = require('jspdf');
 require('jspdf-autotable');
 require('../js/pdf.js');
 
-const company={id:'main',englishName:'Example Export Testing Co., Ltd.',chineseName:'Example Test Company',telephone:'+1 000 000 0000',email:'qa@example.invalid',address:'123 Test Street, Test City, Testland',website:'https://example.invalid',taxId:'QA-TAX-ID-0001',authorizedSignatoryName:'Test Signatory',authorizedSignatoryTitle:'Test Title',accounts:[{id:'usd',label:'Example Test USD Account',currency:'USD',beneficiaryName:'Example Export Testing Co., Ltd.',bankName:'Example Test Bank',bankAddress:'1 Test Bank Road, Test City, Testland',accountNumber:'000000000001',achRoutingNumber:'000000000',wireRoutingNumber:'000000000',swift:'TESTBANKXXX',paymentReference:'Use the test document number.'}]};
-const customer={id:'buyer',buyerType:'Company',buyerName:'Sample Buyer Testing Ltd.',companyName:'Sample Buyer Testing Ltd.',address:'456 Buyer Test Avenue, Sample City, Testland',country:'Testland',contactPerson:'Test Contact',telephone:'+1 000 000 0001',email:'buyer@example.invalid',consigneeName:'Sample Buyer Warehouse',consigneeAddress:'789 Warehouse Test Road, Sample City, Testland',consigneeCountry:'Testland',consigneeTelephone:'+1 000 000 0002'};
-const order=C.calculateOrder({...C.newOrder([]),id:'order-stage',orderNumber:'ORD-20260718-007',piNumber:'PI-202607-007',ciNumber:'CI-202607-007',packingListNumber:'PL-202607-007',piVersion:'Final',ciVersion:'Final',plVersion:'Final',customerId:'buyer',paymentAccountId:'usd',incotermCode:'FOB',incotermEnglishName:'Free On Board',incotermVersion:'Incoterms® 2020',tradeTerm:'FOB',namedPlace:'Yantian Port, Shenzhen, China',currency:'USD',paymentTerm:'30% Deposit, 70% Before Shipment',paymentTermPreset:'30% Deposit, 70% Before Shipment',deliveryTime:'30 days after deposit',plannedTransportMethod:'Sea Freight',actualShipmentDate:'2026-07-18',shipmentDate:'2026-07-18',actualTransportMethod:'Sea Freight',actualTransportConfirmed:true,carrier:'Maersk Line',transportDocumentType:'Bill of Lading',transportDocumentNumber:'BL-20260718-007',vesselFlightNumber:'MAERSK HAMBURG 0718',portOfLoading:'Yantian Port, Shenzhen, China',portOfDischarge:'Hamburg Port, Germany',estimatedArrivalDate:'2026-08-18',purposeOfShipment:'Commercial Sale',shippingMark:'N/M',declaration:'We hereby certify that the information on this invoice is true and correct.',freight:88.5,insurance:12.25,discount:25,otherCharges:5.75,depositPercentage:30,amountPaid:400.95,items:[{id:'line',description:'Thermostatic shower system with overhead and hand shower',modelSku:'TS680 / RR-TS680',material:'Brass / Stainless Steel',hsCode:'84818090',countryOfOrigin:'China',quantity:10,ciQuantity:10,packingQuantity:10,unit:'SETS',unitPrice:125.5,netWeight:4.5,grossWeight:5.2,cartonQty:2,quantityPerCarton:5,cartonNumber:'1-2',cartonLength:80,cartonWidth:40,cartonHeight:30}]});
-const ctx={company,customers:[customer],orders:[order]},out=path.join(__dirname,'..','output','pdf');
-fs.mkdirSync(out,{recursive:true});
-for(const [type,builder] of [['PI',global.FTPDF.buildPI],['CI',global.FTPDF.buildCI],['PL',global.FTPDF.buildPL]]){const check=C.validateDocumentExport(order,type,ctx);if(check.errors.length)throw new Error(`${type}: ${check.errors.join('; ')}`);const doc=builder(order,ctx),file=path.join(out,`Order-Stage-Validation-${type}.pdf`);fs.writeFileSync(file,Buffer.from(doc.output('arraybuffer')));console.log(`Generated ${path.basename(file)} (${doc.getNumberOfPages()} page(s))`);}
+const company = {
+  id: 'main',
+  englishName: 'Example Export Testing Co., Ltd.',
+  chineseName: 'Example Test Company',
+  telephone: '+1 000 000 0000',
+  email: 'qa@example.invalid',
+  address: '123 Test Street, Test City, Testland',
+  website: 'https://example.invalid',
+  taxId: 'QA-TAX-ID-0001',
+  authorizedSignatoryName: 'Test Signatory',
+  authorizedSignatoryTitle: 'Test Title',
+  accounts: [
+    {
+      id: 'usd',
+      label: 'Example Test USD Account',
+      currency: 'USD',
+      beneficiaryName: 'Example Export Testing Co., Ltd.',
+      bankName: 'Example Test Bank',
+      bankAddress: '1 Test Bank Road, Test City, Testland',
+      accountNumber: '000000000001',
+      achRoutingNumber: '000000000',
+      wireRoutingNumber: '000000000',
+      swift: 'TESTBANKXXX',
+      paymentReference: 'Use the test document number.',
+    },
+  ],
+};
+const customer = {
+  id: 'buyer',
+  buyerType: 'Company',
+  buyerName: 'Sample Buyer Testing Ltd.',
+  companyName: 'Sample Buyer Testing Ltd.',
+  address: '456 Buyer Test Avenue, Sample City, Testland',
+  country: 'Testland',
+  contactPerson: 'Test Contact',
+  telephone: '+1 000 000 0001',
+  email: 'buyer@example.invalid',
+  consigneeName: 'Sample Buyer Warehouse',
+  consigneeAddress: '789 Warehouse Test Road, Sample City, Testland',
+  consigneeCountry: 'Testland',
+  consigneeTelephone: '+1 000 000 0002',
+};
+const order = C.calculateOrder({
+  ...C.newOrder([]),
+  id: 'order-stage',
+  orderNumber: 'ORD-20260718-007',
+  piNumber: 'PI-202607-007',
+  ciNumber: 'CI-202607-007',
+  packingListNumber: 'PL-202607-007',
+  piVersion: 'Final',
+  ciVersion: 'Final',
+  plVersion: 'Final',
+  customerId: 'buyer',
+  paymentAccountId: 'usd',
+  incotermCode: 'FOB',
+  incotermEnglishName: 'Free On Board',
+  incotermVersion: 'Incoterms® 2020',
+  tradeTerm: 'FOB',
+  namedPlace: 'Yantian Port, Shenzhen, China',
+  currency: 'USD',
+  paymentTerm: '30% Deposit, 70% Before Shipment',
+  paymentTermPreset: '30% Deposit, 70% Before Shipment',
+  deliveryTime: '30 days after deposit',
+  plannedTransportMethod: 'Sea Freight',
+  actualShipmentDate: '2026-07-18',
+  shipmentDate: '2026-07-18',
+  actualTransportMethod: 'Sea Freight',
+  actualTransportConfirmed: true,
+  carrier: 'Maersk Line',
+  transportDocumentType: 'Bill of Lading',
+  transportDocumentNumber: 'BL-20260718-007',
+  vesselFlightNumber: 'MAERSK HAMBURG 0718',
+  portOfLoading: 'Yantian Port, Shenzhen, China',
+  portOfDischarge: 'Hamburg Port, Germany',
+  estimatedArrivalDate: '2026-08-18',
+  purposeOfShipment: 'Commercial Sale',
+  shippingMark: 'N/M',
+  declaration: 'We hereby certify that the information on this invoice is true and correct.',
+  freight: 88.5,
+  insurance: 12.25,
+  discount: 25,
+  otherCharges: 5.75,
+  depositPercentage: 30,
+  amountPaid: 400.95,
+  items: [
+    {
+      id: 'line',
+      description: 'Thermostatic shower system with overhead and hand shower',
+      modelSku: 'TS680 / RR-TS680',
+      material: 'Brass / Stainless Steel',
+      hsCode: '84818090',
+      countryOfOrigin: 'China',
+      quantity: 10,
+      ciQuantity: 10,
+      packingQuantity: 10,
+      unit: 'SETS',
+      unitPrice: 125.5,
+      netWeight: 4.5,
+      grossWeight: 5.2,
+      cartonQty: 2,
+      quantityPerCarton: 5,
+      cartonNumber: '1-2',
+      cartonLength: 80,
+      cartonWidth: 40,
+      cartonHeight: 30,
+    },
+  ],
+});
+const ctx = { company, customers: [customer], orders: [order] },
+  out = path.join(__dirname, '..', 'output', 'pdf');
+fs.mkdirSync(out, { recursive: true });
+for (const [type, builder] of [
+  ['PI', global.FTPDF.buildPI],
+  ['CI', global.FTPDF.buildCI],
+  ['PL', global.FTPDF.buildPL],
+]) {
+  const check = C.validateDocumentExport(order, type, ctx);
+  if (check.errors.length) throw new Error(`${type}: ${check.errors.join('; ')}`);
+  const doc = builder(order, ctx),
+    file = path.join(out, `Order-Stage-Validation-${type}.pdf`);
+  fs.writeFileSync(file, Buffer.from(doc.output('arraybuffer')));
+  console.log(`Generated ${path.basename(file)} (${doc.getNumberOfPages()} page(s))`);
+}

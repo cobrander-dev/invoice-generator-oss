@@ -4,8 +4,11 @@
 // payload normalization, or application-startup rewrite is allowed here.
 function migrateDatabase(db) {
   db.transaction(() => {
-    db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)');
-    const latest = db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version || 0;
+    db.exec(
+      'CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)',
+    );
+    const latest =
+      db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version || 0;
     if (latest > 4) throw new Error('Unsupported server schema version');
     if (latest === 0) {
       db.exec(`
@@ -23,10 +26,20 @@ function migrateDatabase(db) {
         );
         CREATE INDEX sessions_expiry ON sessions(expires_at);
       `);
-      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)').run(Date.now());
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)').run(
+        Date.now(),
+      );
     }
     if (latest < 2) {
-      for (const table of ['company', 'customers', 'products', 'orders', 'packing_lists', 'meta', 'restore_points']) {
+      for (const table of [
+        'company',
+        'customers',
+        'products',
+        'orders',
+        'packing_lists',
+        'meta',
+        'restore_points',
+      ]) {
         db.exec(`CREATE TABLE ${table} (
           id TEXT PRIMARY KEY,
           payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
@@ -34,7 +47,9 @@ function migrateDatabase(db) {
           updated_at INTEGER NOT NULL
         )`);
       }
-      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)').run(Date.now());
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)').run(
+        Date.now(),
+      );
     }
     if (latest < 3) {
       db.exec(`CREATE TABLE document_sequences (
@@ -44,11 +59,14 @@ function migrateDatabase(db) {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (kind, period)
       )`);
-      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)').run(Date.now());
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)').run(
+        Date.now(),
+      );
     }
     if (latest < 4) {
       const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
-      if (userCount > 1) throw new Error('Multi-user migration requires at most one legacy administrator');
+      if (userCount > 1)
+        throw new Error('Multi-user migration requires at most one legacy administrator');
       db.exec(`
         ALTER TABLE users ADD COLUMN email TEXT;
         ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
@@ -107,16 +125,26 @@ function migrateDatabase(db) {
       const now = Date.now();
       const legacy = db.prepare('SELECT id, username FROM users').get();
       if (legacy) {
-        db.prepare(`UPDATE users SET role='ADMIN', status='ACTIVE', display_name=?, updated_at=? WHERE id=?`)
-          .run(legacy.username, now, legacy.id);
-        db.prepare('INSERT INTO user_login_identifiers (identifier, user_id, kind) VALUES (?, ?, ?)')
-          .run(legacy.username, legacy.id, 'USERNAME');
+        db.prepare(
+          `UPDATE users SET role='ADMIN', status='ACTIVE', display_name=?, updated_at=? WHERE id=?`,
+        ).run(legacy.username, now, legacy.id);
+        db.prepare(
+          'INSERT INTO user_login_identifiers (identifier, user_id, kind) VALUES (?, ?, ?)',
+        ).run(legacy.username, legacy.id, 'USERNAME');
         db.prepare('UPDATE customers SET owner_user_id=?').run(legacy.id);
-        db.prepare(`UPDATE orders SET owner_user_id=?, customer_id=json_extract(payload_json, '$.customerId')`).run(legacy.id);
-        db.prepare(`UPDATE packing_lists SET owner_user_id=?, order_id=COALESCE(json_extract(payload_json, '$.orderId'), '')`).run(legacy.id);
+        db.prepare(
+          `UPDATE orders SET owner_user_id=?, customer_id=json_extract(payload_json, '$.customerId')`,
+        ).run(legacy.id);
+        db.prepare(
+          `UPDATE packing_lists SET owner_user_id=?, order_id=COALESCE(json_extract(payload_json, '$.orderId'), '')`,
+        ).run(legacy.id);
       } else {
-        db.prepare(`UPDATE orders SET customer_id=json_extract(payload_json, '$.customerId')`).run();
-        db.prepare(`UPDATE packing_lists SET order_id=COALESCE(json_extract(payload_json, '$.orderId'), '')`).run();
+        db.prepare(
+          `UPDATE orders SET customer_id=json_extract(payload_json, '$.customerId')`,
+        ).run();
+        db.prepare(
+          `UPDATE packing_lists SET order_id=COALESCE(json_extract(payload_json, '$.orderId'), '')`,
+        ).run();
       }
       db.exec(`
         CREATE TRIGGER users_role_immutable BEFORE UPDATE OF role ON users

@@ -26,6 +26,8 @@ node -e 'const l=require("./package-lock.json");for(const [p,v] of Object.entrie
 | 组件 | 许可证 |
 | --- | --- |
 | fake-indexeddb | Apache-2.0 |
+| ESLint、@eslint/js、globals | MIT |
+| Prettier | MIT |
 
 ## 容器镜像中的软件
 

@@ -27,7 +27,11 @@
     "test:server:host-caddy": "node --test tests/server/host-caddy-deployment.test.js",
     "test:server:multi-user": "node --test tests/server/multi-user-*.test.js",
     "test:pdf:phase6": "node tests/pdf-dependency-regression.js",
-    "test:all": "npm test && npm run test:pdf:phase6 && node --test tests/server/*.test.js"
+    "test:all": "npm test && npm run test:pdf:phase6 && node --test tests/server/*.test.js",
+    "test:server:encoding": "node --test tests/server/frontend-output-encoding.test.js",
+    "lint": "eslint .",
+    "format": "prettier --write \"**/*.js\"",
+    "format:check": "prettier --check \"**/*.js\""
   },
   "dependencies": {
     "argon2": "0.45.1",
@@ -41,6 +45,10 @@
     "jszip": "3.10.1"
   },
   "devDependencies": {
-    "fake-indexeddb": "6.2.4"
+    "@eslint/js": "9.39.5",
+    "eslint": "9.39.5",
+    "fake-indexeddb": "6.2.4",
+    "globals": "17.12.0",
+    "prettier": "3.9.9"
   }
 }

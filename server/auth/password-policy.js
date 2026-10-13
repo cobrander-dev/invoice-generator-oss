@@ -29,4 +29,11 @@ function requireValidPassword(password, minimum = passwordMinimum()) {
   return password;
 }
 
-module.exports = { DEFAULT_MIN_LENGTH, MAX_LENGTH, WEAK_PASSWORDS, passwordMinimum, validatePassword, requireValidPassword };
+module.exports = {
+  DEFAULT_MIN_LENGTH,
+  MAX_LENGTH,
+  WEAK_PASSWORDS,
+  passwordMinimum,
+  validatePassword,
+  requireValidPassword,
+};

@@ -9,7 +9,9 @@ global.jspdf = require('jspdf');
 require('jspdf-autotable');
 require('../js/pdf.js');
 
-const outputDirectory = path.resolve(process.argv[2] || path.join(__dirname, '..', 'tmp', 'pdfs', 'phase6'));
+const outputDirectory = path.resolve(
+  process.argv[2] || path.join(__dirname, '..', 'tmp', 'pdfs', 'phase6'),
+);
 fs.mkdirSync(outputDirectory, { recursive: true });
 
 function packageVersion(name) {
@@ -39,19 +41,21 @@ const company = {
   logo: '',
   signatureImage: testImage,
   companyStampImage: testImage,
-  accounts: [{
-    id: 'test-usd',
-    label: 'Example Test USD Account',
-    currency: 'USD',
-    beneficiaryName: 'Example Export Testing Co., Ltd.',
-    bankName: 'Example Test Bank',
-    bankAddress: '1 Test Bank Road, Test City, Testland',
-    accountNumber: '000000000000',
-    achRoutingNumber: '000000000',
-    wireRoutingNumber: '000000000',
-    swift: 'TESTBANKXXX',
-    paymentReference: 'Use the TEST document number.'
-  }]
+  accounts: [
+    {
+      id: 'test-usd',
+      label: 'Example Test USD Account',
+      currency: 'USD',
+      beneficiaryName: 'Example Export Testing Co., Ltd.',
+      bankName: 'Example Test Bank',
+      bankAddress: '1 Test Bank Road, Test City, Testland',
+      accountNumber: '000000000000',
+      achRoutingNumber: '000000000',
+      wireRoutingNumber: '000000000',
+      swift: 'TESTBANKXXX',
+      paymentReference: 'Use the TEST document number.',
+    },
+  ],
 };
 const customer = {
   id: 'test-buyer',
@@ -66,7 +70,7 @@ const customer = {
   consigneeName: 'Sample Buyer Testing Warehouse',
   consigneeAddress: '789 Warehouse Test Road, Sample City, Testland',
   consigneeCountry: 'Testland',
-  consigneeTelephone: '+1 000 000 0002'
+  consigneeTelephone: '+1 000 000 0002',
 };
 
 function item(index) {
@@ -92,7 +96,7 @@ function item(index) {
     grossWeightPerCarton: 25,
     cartonLength: 60,
     cartonWidth: 40,
-    cartonHeight: 30
+    cartonHeight: 30,
   };
 }
 
@@ -145,29 +149,149 @@ const base = {
   otherCharges: 5,
   depositPercentage: 30,
   paymentRecords: [{ id: 'test-payment', status: 'Confirmed', amount: 500, date: '2026-09-08' }],
-  items: [item(1)]
+  items: [item(1)],
 };
 const ctx = { company, customers: [customer], orders: [] };
 const single = C.calculateOrder(base);
-const multi = C.calculateOrder({ ...base, id: 'phase6-test-order-multi', items: [item(1), item(2), item(3)] });
-const long = C.calculateOrder({ ...base, id: 'phase6-test-order-long', items: Array.from({ length: 75 }, (_, index) => item(index + 1)) });
+const multi = C.calculateOrder({
+  ...base,
+  id: 'phase6-test-order-multi',
+  items: [item(1), item(2), item(3)],
+});
+const long = C.calculateOrder({
+  ...base,
+  id: 'phase6-test-order-long',
+  items: Array.from({ length: 75 }, (_, index) => item(index + 1)),
+});
 
 const variants = [
   ['01-draft-pi-single.pdf', 'PI', single, { piVersion: 'Draft' }],
-  ['02-final-pi-unsigned-single.pdf', 'PI', single, { piVersion: 'Final', piIncludeSigningBlock: false }],
-  ['03-final-pi-electronic-single.pdf', 'PI', single, { piVersion: 'Final', piSigningMode: 'Electronic', piIncludeSigningBlock: true, piSignedAt: '2026-09-08T08:00:00.000Z' }],
-  ['04-final-pi-print-single.pdf', 'PI', single, { piVersion: 'Final', piSigningMode: 'Print', piIncludeSigningBlock: true, piUseDocumentDateForPrint: false }],
-  ['05-revised-pi-multi.pdf', 'PI', multi, { piVersion: 'Final', piRevision: 1, piDisplayNumber: 'PI-TEST-202609-001-R1', piSigningMode: 'Electronic', piIncludeSigningBlock: true, piSignedAt: '2026-09-08T08:00:00.000Z' }],
+  [
+    '02-final-pi-unsigned-single.pdf',
+    'PI',
+    single,
+    { piVersion: 'Final', piIncludeSigningBlock: false },
+  ],
+  [
+    '03-final-pi-electronic-single.pdf',
+    'PI',
+    single,
+    {
+      piVersion: 'Final',
+      piSigningMode: 'Electronic',
+      piIncludeSigningBlock: true,
+      piSignedAt: '2026-09-08T08:00:00.000Z',
+    },
+  ],
+  [
+    '04-final-pi-print-single.pdf',
+    'PI',
+    single,
+    {
+      piVersion: 'Final',
+      piSigningMode: 'Print',
+      piIncludeSigningBlock: true,
+      piUseDocumentDateForPrint: false,
+    },
+  ],
+  [
+    '05-revised-pi-multi.pdf',
+    'PI',
+    multi,
+    {
+      piVersion: 'Final',
+      piRevision: 1,
+      piDisplayNumber: 'PI-TEST-202609-001-R1',
+      piSigningMode: 'Electronic',
+      piIncludeSigningBlock: true,
+      piSignedAt: '2026-09-08T08:00:00.000Z',
+    },
+  ],
   ['06-draft-ci-multi.pdf', 'CI', multi, { ciVersion: 'Draft' }],
-  ['07-final-ci-electronic-multi.pdf', 'CI', multi, { ciVersion: 'Final', ciSigningMode: 'Electronic', ciIncludeSigningBlock: true, ciSignedAt: '2026-09-09T08:00:00.000Z' }],
-  ['08-final-ci-print-multi.pdf', 'CI', multi, { ciVersion: 'Final', ciSigningMode: 'Print', ciIncludeSigningBlock: true, ciUseDocumentDateForPrint: false }],
+  [
+    '07-final-ci-electronic-multi.pdf',
+    'CI',
+    multi,
+    {
+      ciVersion: 'Final',
+      ciSigningMode: 'Electronic',
+      ciIncludeSigningBlock: true,
+      ciSignedAt: '2026-09-09T08:00:00.000Z',
+    },
+  ],
+  [
+    '08-final-ci-print-multi.pdf',
+    'CI',
+    multi,
+    {
+      ciVersion: 'Final',
+      ciSigningMode: 'Print',
+      ciIncludeSigningBlock: true,
+      ciUseDocumentDateForPrint: false,
+    },
+  ],
   ['09-draft-pl-multi.pdf', 'PL', multi, { plVersion: 'Draft' }],
-  ['10-final-pl-unsigned-multi.pdf', 'PL', multi, { plVersion: 'Final', plIncludeSigningBlock: false }],
-  ['11-final-pl-electronic-multi.pdf', 'PL', multi, { plVersion: 'Final', plSigningMode: 'Electronic', plIncludeSigningBlock: true, plSignedAt: '2026-09-09T08:00:00.000Z' }],
-  ['12-final-pl-print-multi.pdf', 'PL', multi, { plVersion: 'Final', plSigningMode: 'Print', plIncludeSigningBlock: true, plUseDocumentDateForPrint: false }],
-  ['13-final-pi-electronic-multipage.pdf', 'PI', long, { piVersion: 'Final', piSigningMode: 'Electronic', piIncludeSigningBlock: true, piSignedAt: '2026-09-08T08:00:00.000Z' }],
-  ['14-final-ci-electronic-multipage.pdf', 'CI', long, { ciVersion: 'Final', ciSigningMode: 'Electronic', ciIncludeSigningBlock: true, ciSignedAt: '2026-09-09T08:00:00.000Z' }],
-  ['15-final-pl-electronic-multipage.pdf', 'PL', long, { plVersion: 'Final', plSigningMode: 'Electronic', plIncludeSigningBlock: true, plSignedAt: '2026-09-09T08:00:00.000Z' }]
+  [
+    '10-final-pl-unsigned-multi.pdf',
+    'PL',
+    multi,
+    { plVersion: 'Final', plIncludeSigningBlock: false },
+  ],
+  [
+    '11-final-pl-electronic-multi.pdf',
+    'PL',
+    multi,
+    {
+      plVersion: 'Final',
+      plSigningMode: 'Electronic',
+      plIncludeSigningBlock: true,
+      plSignedAt: '2026-09-09T08:00:00.000Z',
+    },
+  ],
+  [
+    '12-final-pl-print-multi.pdf',
+    'PL',
+    multi,
+    {
+      plVersion: 'Final',
+      plSigningMode: 'Print',
+      plIncludeSigningBlock: true,
+      plUseDocumentDateForPrint: false,
+    },
+  ],
+  [
+    '13-final-pi-electronic-multipage.pdf',
+    'PI',
+    long,
+    {
+      piVersion: 'Final',
+      piSigningMode: 'Electronic',
+      piIncludeSigningBlock: true,
+      piSignedAt: '2026-09-08T08:00:00.000Z',
+    },
+  ],
+  [
+    '14-final-ci-electronic-multipage.pdf',
+    'CI',
+    long,
+    {
+      ciVersion: 'Final',
+      ciSigningMode: 'Electronic',
+      ciIncludeSigningBlock: true,
+      ciSignedAt: '2026-09-09T08:00:00.000Z',
+    },
+  ],
+  [
+    '15-final-pl-electronic-multipage.pdf',
+    'PL',
+    long,
+    {
+      plVersion: 'Final',
+      plSigningMode: 'Electronic',
+      plIncludeSigningBlock: true,
+      plSignedAt: '2026-09-09T08:00:00.000Z',
+    },
+  ],
 ];
 
 const builders = { PI: global.FTPDF.buildPI, CI: global.FTPDF.buildCI, PL: global.FTPDF.buildPL };
@@ -176,11 +300,22 @@ for (const [fileName, type, source, overrides] of variants) {
   const data = C.calculateOrder({ ...source, ...overrides });
   const doc = builders[type](data, ctx);
   const internalText = doc.internal.pages.flat().join('\n');
-  for (const required of ['TEST SAMPLE - NOT FOR COMMERCIAL USE', company.englishName, customer.companyName, data.orderNumber]) {
+  for (const required of [
+    'TEST SAMPLE - NOT FOR COMMERCIAL USE',
+    company.englishName,
+    customer.companyName,
+    data.orderNumber,
+  ]) {
     if (!internalText.includes(required)) throw new Error(`${fileName}: missing ${required}`);
   }
-  const documentNumber = type === 'PI' ? (data.piDisplayNumber || data.piNumber) : type === 'CI' ? data.ciNumber : data.packingListNumber;
-  if (!internalText.includes(documentNumber)) throw new Error(`${fileName}: missing document number ${documentNumber}`);
+  const documentNumber =
+    type === 'PI'
+      ? data.piDisplayNumber || data.piNumber
+      : type === 'CI'
+        ? data.ciNumber
+        : data.packingListNumber;
+  if (!internalText.includes(documentNumber))
+    throw new Error(`${fileName}: missing document number ${documentNumber}`);
   const buffer = Buffer.from(doc.output('arraybuffer'));
   fs.writeFileSync(path.join(outputDirectory, fileName), buffer);
   manifest.push({
@@ -196,15 +331,26 @@ for (const [fileName, type, source, overrides] of variants) {
     totalGrossWeight: data.totalGrossWeight,
     totalCBM: data.totalCBM,
     signingMode: C.documentSettings(data, type).signingMode,
-    includeSigningBlock: C.documentSettings(data, type).includeSigningBlock
+    includeSigningBlock: C.documentSettings(data, type).includeSigningBlock,
   });
 }
 
-fs.writeFileSync(path.join(outputDirectory, 'manifest.json'), JSON.stringify({
-  generatedAt: new Date().toISOString(),
-  jspdf: packageVersion('jspdf'),
-  jspdfAutotable: packageVersion('jspdf-autotable'),
-  fixtures: { company: company.englishName, buyer: customer.companyName, accountNumber: company.accounts[0].accountNumber },
-  documents: manifest
-}, null, 2));
+fs.writeFileSync(
+  path.join(outputDirectory, 'manifest.json'),
+  JSON.stringify(
+    {
+      generatedAt: new Date().toISOString(),
+      jspdf: packageVersion('jspdf'),
+      jspdfAutotable: packageVersion('jspdf-autotable'),
+      fixtures: {
+        company: company.englishName,
+        buyer: customer.companyName,
+        accountNumber: company.accounts[0].accountNumber,
+      },
+      documents: manifest,
+    },
+    null,
+    2,
+  ),
+);
 console.log(JSON.stringify(manifest, null, 2));

@@ -24,7 +24,8 @@ test('field labels never interpolate the unvalidated order currency unescaped', 
 });
 
 test('escaping is an identity for valid data URLs and ordinary ids', () => {
-  const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==';
+  const dataUrl =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==';
   assert.equal(C.escapeHtml(dataUrl), dataUrl);
   assert.equal(C.escapeHtml('product-1723456789-abc'), 'product-1723456789-abc');
   assert.equal(C.escapeHtml(12), '12');
