@@ -8,64 +8,660 @@ const { fixture } = require('./helpers');
 const { ConflictError, ValidationError } = require('../../server/db/errors');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readSource } = require('../source-text');
 
 let f;
-before(async () => { f = await fixture(); });
-after(async () => { await f.cleanup(); });
+before(async () => {
+  f = await fixture();
+});
+after(async () => {
+  await f.cleanup();
+});
 beforeEach(() => {
-  for (const name of ['company','customers','products','orders','packingLists','meta','restorePoints']) f.repositories[name].clear();
+  for (const name of [
+    'company',
+    'customers',
+    'products',
+    'orders',
+    'packingLists',
+    'meta',
+    'restorePoints',
+  ])
+    f.repositories[name].clear();
   f.sequenceService.clear();
 });
-const company = { id:'main', documentMode:'Test', testMode:true, englishName:'Example Server Testing Co., Ltd.', address:'123 Test Street, Test City, Testland', signatureImage:'TEST_SIGNATURE', companyStampImage:'TEST_STAMP', accounts:[{id:'test-bank',currency:'USD',accountNumber:'000000000000',swift:'TESTBANKXXX'}] };
-const customer = { id:'test-customer', companyName:'Sample Buyer Testing Ltd.', buyerName:'Sample Buyer Testing Ltd.', country:'Testland', consigneeName:'TEST Consignee', consigneeAddress:'456 Test Buyer Road' };
-function seedContext(){if(!f.repositories.company.get('main'))f.repositories.company.put(company,0);if(!f.repositories.customers.get(customer.id))f.repositories.customers.put(customer,0);}
-function draft(id='test-order',date='2026-09-08'){seedContext();return f.orderOperationService.createOrder({id,createdDate:date,testMode:true,customerId:customer.id,paymentAccountId:'test-bank',namedPlace:'Yantian Port, Shenzhen, China',namedPlaceConfirmed:true,items:[{id:'line-1',description:'TEST Product',quantity:10,ciQuantity:10,packingQuantity:10,unit:'PCS',unitPrice:10,netWeight:1,grossWeight:2,cartonQty:2,quantityPerCarton:5,cartonLength:10,cartonWidth:10,cartonHeight:10}]});}
-function final(id='test-order'){let row=draft(id);return f.orderOperationService.action('finalize-pi',id,{signingMode:'Electronic'},row.rowVersion);}
-function withCI(id='test-order'){let row=final(id);return f.orderOperationService.action('generate-ci',id,{},row.rowVersion);}
-function shipment(row){const proposed={...row.payload,actualShipmentDate:'2026-09-09',shipmentDate:'2026-09-09',actualTransportMethod:'Sea Freight',actualTransportConfirmed:true,portOfLoading:'Yantian Port, Shenzhen, China',portOfDischarge:'Hamburg Port, Germany'};return f.orderOperationService.updateOrder(row.payload.id,proposed,row.rowVersion);}
-async function api(c,method,path,body,{csrf=true,origin=f.config.origin,headers={}}={}){let token='';if(csrf&&method!=='GET')token=(await(await c.request('/api/auth/csrf')).json()).csrfToken;return c.request(path,{method,headers:{...(method!=='GET'&&origin!==null?{Origin:origin}:{}),...(method!=='GET'&&csrf?{'X-CSRF-Token':token}:{}),...(body===undefined?{}:{'Content-Type':'application/json'}),...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});}
+const company = {
+  id: 'main',
+  documentMode: 'Test',
+  testMode: true,
+  englishName: 'Example Server Testing Co., Ltd.',
+  address: '123 Test Street, Test City, Testland',
+  signatureImage: 'TEST_SIGNATURE',
+  companyStampImage: 'TEST_STAMP',
+  accounts: [
+    { id: 'test-bank', currency: 'USD', accountNumber: '000000000000', swift: 'TESTBANKXXX' },
+  ],
+};
+const customer = {
+  id: 'test-customer',
+  companyName: 'Sample Buyer Testing Ltd.',
+  buyerName: 'Sample Buyer Testing Ltd.',
+  country: 'Testland',
+  consigneeName: 'TEST Consignee',
+  consigneeAddress: '456 Test Buyer Road',
+};
+function seedContext() {
+  if (!f.repositories.company.get('main')) f.repositories.company.put(company, 0);
+  if (!f.repositories.customers.get(customer.id)) f.repositories.customers.put(customer, 0);
+}
+function draft(id = 'test-order', date = '2026-09-08') {
+  seedContext();
+  return f.orderOperationService.createOrder({
+    id,
+    createdDate: date,
+    testMode: true,
+    customerId: customer.id,
+    paymentAccountId: 'test-bank',
+    namedPlace: 'Yantian Port, Shenzhen, China',
+    namedPlaceConfirmed: true,
+    items: [
+      {
+        id: 'line-1',
+        description: 'TEST Product',
+        quantity: 10,
+        ciQuantity: 10,
+        packingQuantity: 10,
+        unit: 'PCS',
+        unitPrice: 10,
+        netWeight: 1,
+        grossWeight: 2,
+        cartonQty: 2,
+        quantityPerCarton: 5,
+        cartonLength: 10,
+        cartonWidth: 10,
+        cartonHeight: 10,
+      },
+    ],
+  });
+}
+function final(id = 'test-order') {
+  let row = draft(id);
+  return f.orderOperationService.action(
+    'finalize-pi',
+    id,
+    { signingMode: 'Electronic' },
+    row.rowVersion,
+  );
+}
+function withCI(id = 'test-order') {
+  let row = final(id);
+  return f.orderOperationService.action('generate-ci', id, {}, row.rowVersion);
+}
+function shipment(row) {
+  const proposed = {
+    ...row.payload,
+    actualShipmentDate: '2026-09-09',
+    shipmentDate: '2026-09-09',
+    actualTransportMethod: 'Sea Freight',
+    actualTransportConfirmed: true,
+    portOfLoading: 'Yantian Port, Shenzhen, China',
+    portOfDischarge: 'Hamburg Port, Germany',
+  };
+  return f.orderOperationService.updateOrder(row.payload.id, proposed, row.rowVersion);
+}
+async function api(
+  c,
+  method,
+  path,
+  body,
+  { csrf = true, origin = f.config.origin, headers = {} } = {},
+) {
+  let token = '';
+  if (csrf && method !== 'GET')
+    token = (await (await c.request('/api/auth/csrf')).json()).csrfToken;
+  return c.request(path, {
+    method,
+    headers: {
+      ...(method !== 'GET' && origin !== null ? { Origin: origin } : {}),
+      ...(method !== 'GET' && csrf ? { 'X-CSRF-Token': token } : {}),
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...headers,
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+}
 
-test('003 schema contains internal document_sequences table',()=>assert.ok(f.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_sequences'").get()));
-test('two order allocations are unique',()=>{const a=draft('o-a').payload.orderNumber;const b=f.orderOperationService.createOrder({...draftInput('o-b')}).payload.orderNumber;assert.notEqual(a,b);});
-function draftInput(id,date='2026-09-08'){return{id,createdDate:date,testMode:true,customerId:customer.id,paymentAccountId:'test-bank',namedPlace:'Yantian Port, Shenzhen, China',namedPlaceConfirmed:true,items:[{id:`line-${id}`,description:'TEST Product',quantity:1,unit:'PCS',unitPrice:10}]};}
-test('server keeps Order number format',()=>assert.match(draft().payload.orderNumber,/^ORD-20260908-\d{3}$/));
-test('server allocates unique PI numbers',()=>{const a=draft('o-a').payload.piNumber,b=f.orderOperationService.createOrder(draftInput('o-b')).payload.piNumber;assert.notEqual(a,b);});
-test('imported 001-003 advances next number to 004',()=>{seedContext();const orders=[1,2,3].map(n=>({...draftInput(`import-${n}`),orderNumber:`ORD-20260908-00${n}`,piNumber:`PI-202609-00${n}`}));f.businessBackupService.replaceAllBusinessData({version:2,createdAt:'TEST',exportedAt:'TEST',company:[company],customers:[customer],products:[],orders,packingLists:[],meta:[]},false);assert.equal(f.orderOperationService.createOrder(draftInput('next')).payload.orderNumber,'ORD-20260908-004');});
-test('number gaps never reuse an existing high number',()=>{seedContext();f.repositories.orders.put({...draftInput('high'),orderNumber:'ORD-20260908-009',piNumber:'PI-202609-009'},0);assert.equal(f.orderOperationService.createOrder(draftInput('next')).payload.orderNumber,'ORD-20260908-010');});
-test('restore resynchronizes sequences to restored business data',()=>{seedContext();const backup={version:2,createdAt:'TEST',exportedAt:'TEST',company:[company],customers:[customer],products:[],orders:[{...draftInput('old'),orderNumber:'ORD-20260908-007',piNumber:'PI-202609-007'}],packingLists:[],meta:[]};f.businessBackupService.replaceAllBusinessData(backup,false);f.businessBackupService.replaceAllBusinessData({...backup,orders:[]},true);f.businessBackupService.restoreLatestBusinessData();assert.equal(f.orderOperationService.createOrder(draftInput('next')).payload.orderNumber,'ORD-20260908-008');});
-test('clear resets sequence and preserves restore point',()=>{draft();f.businessBackupService.clearAllBusinessData(true);assert.equal(f.db.prepare('SELECT COUNT(*) n FROM document_sequences').get().n,0);assert.ok(f.repositories.restorePoints.get('latest'));seedContext();assert.equal(f.orderOperationService.createOrder(draftInput('new')).payload.orderNumber,'ORD-20260908-001');});
-test('Final PI action creates revision zero snapshot',()=>{const row=final();assert.equal(row.payload.piHistory.length,1);assert.equal(row.payload.activePiRevision,0);assert.equal(row.payload.piDocument.status,'Final');});
-test('invalid Final PI is rejected',()=>{seedContext();const row=f.orderOperationService.createOrder({...draftInput('bad'),items:[]});assert.throws(()=>f.orderOperationService.action('finalize-pi','bad',{},row.rowVersion),ValidationError);});
-test('stale Final PI action returns conflict',()=>{const row=draft();assert.throws(()=>f.orderOperationService.action('finalize-pi',row.payload.id,{},99),ConflictError);});
-test('double Final PI only creates one snapshot',()=>{const row=draft(),saved=f.orderOperationService.action('finalize-pi',row.payload.id,{},row.rowVersion);assert.throws(()=>f.orderOperationService.action('finalize-pi',row.payload.id,{},row.rowVersion),ConflictError);assert.equal(saved.payload.piHistory.length,1);});
-test('Revised PI increments revision',()=>{let row=final(),changed={...row.payload,freight:5};row=f.orderOperationService.updateOrder(row.payload.id,changed,row.rowVersion);row=f.orderOperationService.action('revise-pi',row.payload.id,{},row.rowVersion);assert.deepEqual(row.payload.piHistory.map(x=>x.revision),[0,1]);});
-test('two revisions from one version cannot duplicate',()=>{let row=final(),changed={...row.payload,freight:5};row=f.orderOperationService.updateOrder(row.payload.id,changed,row.rowVersion);const stale=row.rowVersion,saved=f.orderOperationService.action('revise-pi',row.payload.id,{},stale);assert.throws(()=>f.orderOperationService.action('revise-pi',row.payload.id,{},stale),ConflictError);assert.equal(saved.payload.activePiRevision,1);});
-test('old Final PI snapshot remains immutable after revision',()=>{let row=final(),old=clone(C.piSnapshot(row.payload,0));row=f.orderOperationService.updateOrder(row.payload.id,{...row.payload,freight:5},row.rowVersion);row=f.orderOperationService.action('revise-pi',row.payload.id,{},row.rowVersion);assert.deepEqual(C.piSnapshot(row.payload,0),old);});
-function clone(v){return JSON.parse(JSON.stringify(v));}
-test('CI action uses current Final PI revision',()=>{let row=final();row=f.orderOperationService.action('generate-ci',row.payload.id,{},row.rowVersion);assert.equal(row.payload.ciDocument.relatedPiRevision,0);assert.equal(row.payload.ciDocument.source,'Final PI');});
-test('CI without Final PI is rejected',()=>{const row=draft();assert.throws(()=>f.orderOperationService.action('generate-ci',row.payload.id,{},row.rowVersion),ConflictError);});
-test('CI numbers are unique',()=>{const a=withCI('o-a').payload.ciNumber,b=withCI('o-b').payload.ciNumber;assert.notEqual(a,b);});
-test('server preserves core CI difference detection',()=>{let row=withCI(),proposed={...row.payload,items:row.payload.items.map(x=>({...x,ciQuantity:9}))};row=f.orderOperationService.updateOrder(row.payload.id,proposed,row.rowVersion);assert.ok(row.payload.ciDocument.differences.some(x=>x.field.includes('quantity')));});
-test('CI difference confirmation is an explicit action',()=>{let row=withCI(),proposed={...row.payload,items:row.payload.items.map(x=>({...x,ciQuantity:9}))};row=f.orderOperationService.updateOrder(row.payload.id,proposed,row.rowVersion);row=f.orderOperationService.action('confirm-ci-differences',row.payload.id,{},row.rowVersion);assert.equal(row.payload.ciDocument.differencesConfirmed,true);});
-test('Packing List generation atomically writes order and list',()=>{let row=shipment(withCI()),result=f.orderOperationService.packingAction('generate-packing-list',row.payload.id,{},row.rowVersion,0);assert.equal(result.order.payload.packingListDocument.id,result.packingList.payload.id);assert.ok(f.repositories.packingLists.get(result.packingList.payload.id));});
-test('Packing List generation rejects missing actual shipment',()=>{const row=withCI();assert.throws(()=>f.orderOperationService.packingAction('generate-packing-list',row.payload.id,{},row.rowVersion,0),ValidationError);});
-test('invalid Packing List finalization is rejected and rolled back',()=>{let row=shipment(withCI()),result=f.orderOperationService.packingAction('generate-packing-list',row.payload.id,{},row.rowVersion,0),record={...result.packingList.payload,data:{...result.packingList.payload.data,items:result.packingList.payload.data.items.map(x=>({...x,cartonQty:0}))}};assert.throws(()=>f.orderOperationService.packingAction('finalize-packing-list',row.payload.id,{packingList:record},result.order.rowVersion,result.packingList.rowVersion),ValidationError);assert.equal(f.repositories.orders.get(row.payload.id).rowVersion,result.order.rowVersion);});
-test('stale Packing List save conflicts',()=>{let row=shipment(withCI()),result=f.orderOperationService.packingAction('generate-packing-list',row.payload.id,{},row.rowVersion,0);assert.throws(()=>f.orderOperationService.packingAction('save-packing-list',row.payload.id,{packingList:result.packingList.payload},result.order.rowVersion,0),ConflictError);});
-test('Packing List number is server-generated and unique',()=>{let a=shipment(withCI('o-a')),b=shipment(withCI('o-b'));const pa=f.orderOperationService.packingAction('generate-packing-list','o-a',{},a.rowVersion,0),pb=f.orderOperationService.packingAction('generate-packing-list','o-b',{},b.rowVersion,0);assert.notEqual(pa.order.payload.packingListNumber,pb.order.payload.packingListNumber);});
-test('valid Packing List can be finalized through the server transaction',()=>{let row=shipment(withCI()),result=f.orderOperationService.packingAction('generate-packing-list',row.payload.id,{},row.rowVersion,0);result=f.orderOperationService.packingAction('finalize-packing-list',row.payload.id,{packingList:result.packingList.payload,signingMode:'Electronic',includeSigningBlock:true},result.order.rowVersion,result.packingList.rowVersion);assert.equal(result.order.payload.plVersion,'Final');assert.equal(result.packingList.payload.status,'Final');});
-test('payment action recalculates confirmed amount',()=>{let row=draft();row=f.orderOperationService.action('payment-tracking',row.payload.id,{paymentRecords:[{id:'p1',amount:30,currency:'USD',status:'Confirmed'}],currentPaymentStage:'Deposit Requested'},row.rowVersion);assert.equal(row.payload.amountPaid,30);assert.equal(row.payload.outstandingAmount,70);});
-test('payment update recalculates totals',()=>{let row=draft();row=f.orderOperationService.action('payment-tracking',row.payload.id,{paymentRecords:[{id:'p1',amount:30,currency:'USD',status:'Confirmed'}],currentPaymentStage:'Deposit Requested'},row.rowVersion);row=f.orderOperationService.action('payment-tracking',row.payload.id,{paymentRecords:[{id:'p1',amount:40,currency:'USD',status:'Confirmed'}],currentPaymentStage:'Balance Requested'},row.rowVersion);assert.equal(row.payload.amountPaid,40);assert.equal(row.payload.amountPayableNow,60);});
-test('payment removal recalculates totals',()=>{let row=draft();row=f.orderOperationService.action('payment-tracking',row.payload.id,{paymentRecords:[{id:'p1',amount:30,currency:'USD',status:'Confirmed'}],currentPaymentStage:'Deposit Requested'},row.rowVersion);row=f.orderOperationService.action('payment-tracking',row.payload.id,{paymentRecords:[],currentPaymentStage:'Deposit Requested'},row.rowVersion);assert.equal(row.payload.amountPaid,0);assert.equal(row.payload.amountPayableNow,30);});
-test('payment stage uses existing core formula',()=>{let row=draft();row=f.orderOperationService.action('payment-tracking',row.payload.id,{paymentRecords:[],currentPaymentStage:'Waiting for Production'},row.rowVersion);assert.equal(row.payload.amountPayableNow,0);});
-test('ordinary PUT cannot alter Final history',()=>{const row=final();assert.throws(()=>f.orderOperationService.updateOrder(row.payload.id,{...row.payload,piHistory:[]},row.rowVersion),ConflictError);});
-test('ordinary PUT cannot alter document numbers',()=>{const row=draft();assert.throws(()=>f.orderOperationService.updateOrder(row.payload.id,{...row.payload,piNumber:'PI-FAKE'},row.rowVersion),ConflictError);});
-test('ordinary PUT cannot forge Final CI',()=>{const row=draft();assert.throws(()=>f.orderOperationService.updateOrder(row.payload.id,{...row.payload,ciVersion:'Final',ciDocument:{status:'Final'}},row.rowVersion),ConflictError);});
-test('business backup excludes sequence metadata',()=>{draft();const data=f.businessBackupService.exportAllBusinessData(),text=JSON.stringify(data);assert.equal('document_sequences' in data,false);assert.doesNotMatch(text,/next_value|document_sequences/);});
-test('Final PI signing snapshot preserves TEST assets',()=>{const row=final();const signing=C.latestPISnapshot(row.payload).signing;assert.equal(signing.signatureImage,'TEST_SIGNATURE');assert.equal(signing.companyStampImage,'TEST_STAMP');});
-test('business errors do not disclose SQLite internals',async()=>{const c=f.client();await c.login();const r=await api(c,'POST','/api/orders/missing/finalize-pi',{}, {headers:{'If-Match':'1'}});assert.equal(r.status,404);assert.doesNotMatch(JSON.stringify(await r.json()),/sqlite|select|insert|\/tmp\//i);});
-test('unauthenticated business action returns 401',async()=>assert.equal((await api(f.client(),'POST','/api/orders/x/finalize-pi',{}, {csrf:false,origin:null,headers:{'If-Match':'1'}})).status,401));
-test('business action without CSRF returns 403',async()=>{const c=f.client();await c.login();assert.equal((await api(c,'POST','/api/orders/x/finalize-pi',{}, {csrf:false,headers:{'If-Match':'1'}})).status,403);});
-test('business action with wrong Origin returns 403',async()=>{const c=f.client();await c.login();assert.equal((await api(c,'POST','/api/orders/x/finalize-pi',{}, {origin:'https://attacker.example.invalid',headers:{'If-Match':'1'}})).status,403);});
-test('two authenticated clients produce one Final and one stale conflict',async()=>{let row=draft();const a=f.client(),b=f.client();await a.login();await b.login();const [ra,rb]=await Promise.all([api(a,'POST',`/api/orders/${row.payload.id}/finalize-pi`,{}, {headers:{'If-Match':String(row.rowVersion)}}),api(b,'POST',`/api/orders/${row.payload.id}/finalize-pi`,{}, {headers:{'If-Match':String(row.rowVersion)}})]);assert.deepEqual([ra.status,rb.status].sort(),[200,409]);assert.equal(f.repositories.orders.get(row.payload.id).payload.piHistory.length,1);});
-test('two authenticated clients receive distinct server Order numbers',async()=>{seedContext();const a=f.client(),b=f.client();await a.login();await b.login();const [ra,rb]=await Promise.all([api(a,'POST','/api/orders',draftInput('parallel-a')),api(b,'POST','/api/orders',draftInput('parallel-b'))]);const [oa,ob]=await Promise.all([ra.json(),rb.json()]);assert.equal(ra.status,201);assert.equal(rb.status,201);assert.notEqual(oa.data.orderNumber,ob.data.orderNumber);});
-test('browser form deep-clones saved state before CI confirmation action',()=>{const source=fs.readFileSync(path.join(__dirname,'../../js/app.js'),'utf8');assert.match(source,/const o=C\.deepClone\(state\.currentOrder\)/);assert.match(source,/DB\.confirmCIDifferences/);});
+test('003 schema contains internal document_sequences table', () =>
+  assert.ok(
+    f.db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_sequences'")
+      .get(),
+  ));
+test('two order allocations are unique', () => {
+  const a = draft('o-a').payload.orderNumber;
+  const b = f.orderOperationService.createOrder({ ...draftInput('o-b') }).payload.orderNumber;
+  assert.notEqual(a, b);
+});
+function draftInput(id, date = '2026-09-08') {
+  return {
+    id,
+    createdDate: date,
+    testMode: true,
+    customerId: customer.id,
+    paymentAccountId: 'test-bank',
+    namedPlace: 'Yantian Port, Shenzhen, China',
+    namedPlaceConfirmed: true,
+    items: [
+      { id: `line-${id}`, description: 'TEST Product', quantity: 1, unit: 'PCS', unitPrice: 10 },
+    ],
+  };
+}
+test('server keeps Order number format', () =>
+  assert.match(draft().payload.orderNumber, /^ORD-20260908-\d{3}$/));
+test('server allocates unique PI numbers', () => {
+  const a = draft('o-a').payload.piNumber,
+    b = f.orderOperationService.createOrder(draftInput('o-b')).payload.piNumber;
+  assert.notEqual(a, b);
+});
+test('imported 001-003 advances next number to 004', () => {
+  seedContext();
+  const orders = [1, 2, 3].map((n) => ({
+    ...draftInput(`import-${n}`),
+    orderNumber: `ORD-20260908-00${n}`,
+    piNumber: `PI-202609-00${n}`,
+  }));
+  f.businessBackupService.replaceAllBusinessData(
+    {
+      version: 2,
+      createdAt: 'TEST',
+      exportedAt: 'TEST',
+      company: [company],
+      customers: [customer],
+      products: [],
+      orders,
+      packingLists: [],
+      meta: [],
+    },
+    false,
+  );
+  assert.equal(
+    f.orderOperationService.createOrder(draftInput('next')).payload.orderNumber,
+    'ORD-20260908-004',
+  );
+});
+test('number gaps never reuse an existing high number', () => {
+  seedContext();
+  f.repositories.orders.put(
+    { ...draftInput('high'), orderNumber: 'ORD-20260908-009', piNumber: 'PI-202609-009' },
+    0,
+  );
+  assert.equal(
+    f.orderOperationService.createOrder(draftInput('next')).payload.orderNumber,
+    'ORD-20260908-010',
+  );
+});
+test('restore resynchronizes sequences to restored business data', () => {
+  seedContext();
+  const backup = {
+    version: 2,
+    createdAt: 'TEST',
+    exportedAt: 'TEST',
+    company: [company],
+    customers: [customer],
+    products: [],
+    orders: [{ ...draftInput('old'), orderNumber: 'ORD-20260908-007', piNumber: 'PI-202609-007' }],
+    packingLists: [],
+    meta: [],
+  };
+  f.businessBackupService.replaceAllBusinessData(backup, false);
+  f.businessBackupService.replaceAllBusinessData({ ...backup, orders: [] }, true);
+  f.businessBackupService.restoreLatestBusinessData();
+  assert.equal(
+    f.orderOperationService.createOrder(draftInput('next')).payload.orderNumber,
+    'ORD-20260908-008',
+  );
+});
+test('clear resets sequence and preserves restore point', () => {
+  draft();
+  f.businessBackupService.clearAllBusinessData(true);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM document_sequences').get().n, 0);
+  assert.ok(f.repositories.restorePoints.get('latest'));
+  seedContext();
+  assert.equal(
+    f.orderOperationService.createOrder(draftInput('new')).payload.orderNumber,
+    'ORD-20260908-001',
+  );
+});
+test('Final PI action creates revision zero snapshot', () => {
+  const row = final();
+  assert.equal(row.payload.piHistory.length, 1);
+  assert.equal(row.payload.activePiRevision, 0);
+  assert.equal(row.payload.piDocument.status, 'Final');
+});
+test('invalid Final PI is rejected', () => {
+  seedContext();
+  const row = f.orderOperationService.createOrder({ ...draftInput('bad'), items: [] });
+  assert.throws(
+    () => f.orderOperationService.action('finalize-pi', 'bad', {}, row.rowVersion),
+    ValidationError,
+  );
+});
+test('stale Final PI action returns conflict', () => {
+  const row = draft();
+  assert.throws(
+    () => f.orderOperationService.action('finalize-pi', row.payload.id, {}, 99),
+    ConflictError,
+  );
+});
+test('double Final PI only creates one snapshot', () => {
+  const row = draft(),
+    saved = f.orderOperationService.action('finalize-pi', row.payload.id, {}, row.rowVersion);
+  assert.throws(
+    () => f.orderOperationService.action('finalize-pi', row.payload.id, {}, row.rowVersion),
+    ConflictError,
+  );
+  assert.equal(saved.payload.piHistory.length, 1);
+});
+test('Revised PI increments revision', () => {
+  let row = final(),
+    changed = { ...row.payload, freight: 5 };
+  row = f.orderOperationService.updateOrder(row.payload.id, changed, row.rowVersion);
+  row = f.orderOperationService.action('revise-pi', row.payload.id, {}, row.rowVersion);
+  assert.deepEqual(
+    row.payload.piHistory.map((x) => x.revision),
+    [0, 1],
+  );
+});
+test('two revisions from one version cannot duplicate', () => {
+  let row = final(),
+    changed = { ...row.payload, freight: 5 };
+  row = f.orderOperationService.updateOrder(row.payload.id, changed, row.rowVersion);
+  const stale = row.rowVersion,
+    saved = f.orderOperationService.action('revise-pi', row.payload.id, {}, stale);
+  assert.throws(
+    () => f.orderOperationService.action('revise-pi', row.payload.id, {}, stale),
+    ConflictError,
+  );
+  assert.equal(saved.payload.activePiRevision, 1);
+});
+test('old Final PI snapshot remains immutable after revision', () => {
+  let row = final(),
+    old = clone(C.piSnapshot(row.payload, 0));
+  row = f.orderOperationService.updateOrder(
+    row.payload.id,
+    { ...row.payload, freight: 5 },
+    row.rowVersion,
+  );
+  row = f.orderOperationService.action('revise-pi', row.payload.id, {}, row.rowVersion);
+  assert.deepEqual(C.piSnapshot(row.payload, 0), old);
+});
+function clone(v) {
+  return JSON.parse(JSON.stringify(v));
+}
+test('CI action uses current Final PI revision', () => {
+  let row = final();
+  row = f.orderOperationService.action('generate-ci', row.payload.id, {}, row.rowVersion);
+  assert.equal(row.payload.ciDocument.relatedPiRevision, 0);
+  assert.equal(row.payload.ciDocument.source, 'Final PI');
+});
+test('CI without Final PI is rejected', () => {
+  const row = draft();
+  assert.throws(
+    () => f.orderOperationService.action('generate-ci', row.payload.id, {}, row.rowVersion),
+    ConflictError,
+  );
+});
+test('CI numbers are unique', () => {
+  const a = withCI('o-a').payload.ciNumber,
+    b = withCI('o-b').payload.ciNumber;
+  assert.notEqual(a, b);
+});
+test('server preserves core CI difference detection', () => {
+  let row = withCI(),
+    proposed = { ...row.payload, items: row.payload.items.map((x) => ({ ...x, ciQuantity: 9 })) };
+  row = f.orderOperationService.updateOrder(row.payload.id, proposed, row.rowVersion);
+  assert.ok(row.payload.ciDocument.differences.some((x) => x.field.includes('quantity')));
+});
+test('CI difference confirmation is an explicit action', () => {
+  let row = withCI(),
+    proposed = { ...row.payload, items: row.payload.items.map((x) => ({ ...x, ciQuantity: 9 })) };
+  row = f.orderOperationService.updateOrder(row.payload.id, proposed, row.rowVersion);
+  row = f.orderOperationService.action(
+    'confirm-ci-differences',
+    row.payload.id,
+    {},
+    row.rowVersion,
+  );
+  assert.equal(row.payload.ciDocument.differencesConfirmed, true);
+});
+test('Packing List generation atomically writes order and list', () => {
+  let row = shipment(withCI()),
+    result = f.orderOperationService.packingAction(
+      'generate-packing-list',
+      row.payload.id,
+      {},
+      row.rowVersion,
+      0,
+    );
+  assert.equal(result.order.payload.packingListDocument.id, result.packingList.payload.id);
+  assert.ok(f.repositories.packingLists.get(result.packingList.payload.id));
+});
+test('Packing List generation rejects missing actual shipment', () => {
+  const row = withCI();
+  assert.throws(
+    () =>
+      f.orderOperationService.packingAction(
+        'generate-packing-list',
+        row.payload.id,
+        {},
+        row.rowVersion,
+        0,
+      ),
+    ValidationError,
+  );
+});
+test('invalid Packing List finalization is rejected and rolled back', () => {
+  let row = shipment(withCI()),
+    result = f.orderOperationService.packingAction(
+      'generate-packing-list',
+      row.payload.id,
+      {},
+      row.rowVersion,
+      0,
+    ),
+    record = {
+      ...result.packingList.payload,
+      data: {
+        ...result.packingList.payload.data,
+        items: result.packingList.payload.data.items.map((x) => ({ ...x, cartonQty: 0 })),
+      },
+    };
+  assert.throws(
+    () =>
+      f.orderOperationService.packingAction(
+        'finalize-packing-list',
+        row.payload.id,
+        { packingList: record },
+        result.order.rowVersion,
+        result.packingList.rowVersion,
+      ),
+    ValidationError,
+  );
+  assert.equal(f.repositories.orders.get(row.payload.id).rowVersion, result.order.rowVersion);
+});
+test('stale Packing List save conflicts', () => {
+  let row = shipment(withCI()),
+    result = f.orderOperationService.packingAction(
+      'generate-packing-list',
+      row.payload.id,
+      {},
+      row.rowVersion,
+      0,
+    );
+  assert.throws(
+    () =>
+      f.orderOperationService.packingAction(
+        'save-packing-list',
+        row.payload.id,
+        { packingList: result.packingList.payload },
+        result.order.rowVersion,
+        0,
+      ),
+    ConflictError,
+  );
+});
+test('Packing List number is server-generated and unique', () => {
+  let a = shipment(withCI('o-a')),
+    b = shipment(withCI('o-b'));
+  const pa = f.orderOperationService.packingAction(
+      'generate-packing-list',
+      'o-a',
+      {},
+      a.rowVersion,
+      0,
+    ),
+    pb = f.orderOperationService.packingAction('generate-packing-list', 'o-b', {}, b.rowVersion, 0);
+  assert.notEqual(pa.order.payload.packingListNumber, pb.order.payload.packingListNumber);
+});
+test('valid Packing List can be finalized through the server transaction', () => {
+  let row = shipment(withCI()),
+    result = f.orderOperationService.packingAction(
+      'generate-packing-list',
+      row.payload.id,
+      {},
+      row.rowVersion,
+      0,
+    );
+  result = f.orderOperationService.packingAction(
+    'finalize-packing-list',
+    row.payload.id,
+    {
+      packingList: result.packingList.payload,
+      signingMode: 'Electronic',
+      includeSigningBlock: true,
+    },
+    result.order.rowVersion,
+    result.packingList.rowVersion,
+  );
+  assert.equal(result.order.payload.plVersion, 'Final');
+  assert.equal(result.packingList.payload.status, 'Final');
+});
+test('payment action recalculates confirmed amount', () => {
+  let row = draft();
+  row = f.orderOperationService.action(
+    'payment-tracking',
+    row.payload.id,
+    {
+      paymentRecords: [{ id: 'p1', amount: 30, currency: 'USD', status: 'Confirmed' }],
+      currentPaymentStage: 'Deposit Requested',
+    },
+    row.rowVersion,
+  );
+  assert.equal(row.payload.amountPaid, 30);
+  assert.equal(row.payload.outstandingAmount, 70);
+});
+test('payment update recalculates totals', () => {
+  let row = draft();
+  row = f.orderOperationService.action(
+    'payment-tracking',
+    row.payload.id,
+    {
+      paymentRecords: [{ id: 'p1', amount: 30, currency: 'USD', status: 'Confirmed' }],
+      currentPaymentStage: 'Deposit Requested',
+    },
+    row.rowVersion,
+  );
+  row = f.orderOperationService.action(
+    'payment-tracking',
+    row.payload.id,
+    {
+      paymentRecords: [{ id: 'p1', amount: 40, currency: 'USD', status: 'Confirmed' }],
+      currentPaymentStage: 'Balance Requested',
+    },
+    row.rowVersion,
+  );
+  assert.equal(row.payload.amountPaid, 40);
+  assert.equal(row.payload.amountPayableNow, 60);
+});
+test('payment removal recalculates totals', () => {
+  let row = draft();
+  row = f.orderOperationService.action(
+    'payment-tracking',
+    row.payload.id,
+    {
+      paymentRecords: [{ id: 'p1', amount: 30, currency: 'USD', status: 'Confirmed' }],
+      currentPaymentStage: 'Deposit Requested',
+    },
+    row.rowVersion,
+  );
+  row = f.orderOperationService.action(
+    'payment-tracking',
+    row.payload.id,
+    { paymentRecords: [], currentPaymentStage: 'Deposit Requested' },
+    row.rowVersion,
+  );
+  assert.equal(row.payload.amountPaid, 0);
+  assert.equal(row.payload.amountPayableNow, 30);
+});
+test('payment stage uses existing core formula', () => {
+  let row = draft();
+  row = f.orderOperationService.action(
+    'payment-tracking',
+    row.payload.id,
+    { paymentRecords: [], currentPaymentStage: 'Waiting for Production' },
+    row.rowVersion,
+  );
+  assert.equal(row.payload.amountPayableNow, 0);
+});
+test('ordinary PUT cannot alter Final history', () => {
+  const row = final();
+  assert.throws(
+    () =>
+      f.orderOperationService.updateOrder(
+        row.payload.id,
+        { ...row.payload, piHistory: [] },
+        row.rowVersion,
+      ),
+    ConflictError,
+  );
+});
+test('ordinary PUT cannot alter document numbers', () => {
+  const row = draft();
+  assert.throws(
+    () =>
+      f.orderOperationService.updateOrder(
+        row.payload.id,
+        { ...row.payload, piNumber: 'PI-FAKE' },
+        row.rowVersion,
+      ),
+    ConflictError,
+  );
+});
+test('ordinary PUT cannot forge Final CI', () => {
+  const row = draft();
+  assert.throws(
+    () =>
+      f.orderOperationService.updateOrder(
+        row.payload.id,
+        { ...row.payload, ciVersion: 'Final', ciDocument: { status: 'Final' } },
+        row.rowVersion,
+      ),
+    ConflictError,
+  );
+});
+test('business backup excludes sequence metadata', () => {
+  draft();
+  const data = f.businessBackupService.exportAllBusinessData(),
+    text = JSON.stringify(data);
+  assert.equal('document_sequences' in data, false);
+  assert.doesNotMatch(text, /next_value|document_sequences/);
+});
+test('Final PI signing snapshot preserves TEST assets', () => {
+  const row = final();
+  const signing = C.latestPISnapshot(row.payload).signing;
+  assert.equal(signing.signatureImage, 'TEST_SIGNATURE');
+  assert.equal(signing.companyStampImage, 'TEST_STAMP');
+});
+test('business errors do not disclose SQLite internals', async () => {
+  const c = f.client();
+  await c.login();
+  const r = await api(
+    c,
+    'POST',
+    '/api/orders/missing/finalize-pi',
+    {},
+    { headers: { 'If-Match': '1' } },
+  );
+  assert.equal(r.status, 404);
+  assert.doesNotMatch(JSON.stringify(await r.json()), /sqlite|select|insert|\/tmp\//i);
+});
+test('unauthenticated business action returns 401', async () =>
+  assert.equal(
+    (
+      await api(
+        f.client(),
+        'POST',
+        '/api/orders/x/finalize-pi',
+        {},
+        { csrf: false, origin: null, headers: { 'If-Match': '1' } },
+      )
+    ).status,
+    401,
+  ));
+test('business action without CSRF returns 403', async () => {
+  const c = f.client();
+  await c.login();
+  assert.equal(
+    (
+      await api(
+        c,
+        'POST',
+        '/api/orders/x/finalize-pi',
+        {},
+        { csrf: false, headers: { 'If-Match': '1' } },
+      )
+    ).status,
+    403,
+  );
+});
+test('business action with wrong Origin returns 403', async () => {
+  const c = f.client();
+  await c.login();
+  assert.equal(
+    (
+      await api(
+        c,
+        'POST',
+        '/api/orders/x/finalize-pi',
+        {},
+        { origin: 'https://attacker.example.invalid', headers: { 'If-Match': '1' } },
+      )
+    ).status,
+    403,
+  );
+});
+test('two authenticated clients produce one Final and one stale conflict', async () => {
+  let row = draft();
+  const a = f.client(),
+    b = f.client();
+  await a.login();
+  await b.login();
+  const [ra, rb] = await Promise.all([
+    api(
+      a,
+      'POST',
+      `/api/orders/${row.payload.id}/finalize-pi`,
+      {},
+      { headers: { 'If-Match': String(row.rowVersion) } },
+    ),
+    api(
+      b,
+      'POST',
+      `/api/orders/${row.payload.id}/finalize-pi`,
+      {},
+      { headers: { 'If-Match': String(row.rowVersion) } },
+    ),
+  ]);
+  assert.deepEqual([ra.status, rb.status].sort(), [200, 409]);
+  assert.equal(f.repositories.orders.get(row.payload.id).payload.piHistory.length, 1);
+});
+test('two authenticated clients receive distinct server Order numbers', async () => {
+  seedContext();
+  const a = f.client(),
+    b = f.client();
+  await a.login();
+  await b.login();
+  const [ra, rb] = await Promise.all([
+    api(a, 'POST', '/api/orders', draftInput('parallel-a')),
+    api(b, 'POST', '/api/orders', draftInput('parallel-b')),
+  ]);
+  const [oa, ob] = await Promise.all([ra.json(), rb.json()]);
+  assert.equal(ra.status, 201);
+  assert.equal(rb.status, 201);
+  assert.notEqual(oa.data.orderNumber, ob.data.orderNumber);
+});
+test('browser form deep-clones saved state before CI confirmation action', () => {
+  const source = readSource('js/app.js').toString();
+  assert.match(source, /const o=C\.deepClone\(state\.currentOrder\)/);
+  assert.match(source, /DB\.confirmCIDifferences/);
+});
