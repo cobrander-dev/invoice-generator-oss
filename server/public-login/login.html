@@ -10,18 +10,18 @@
 </head>
 <body>
   <main class="login-panel">
-    <p class="eyebrow">FOREIGN TRADE DOCUMENTS</p>
-    <h1>账号登录</h1>
+    <p class="eyebrow">外贸单据系统 <span class="en">Foreign Trade Documents</span></p>
+    <h1>账号登录 <span class="en">Sign In</span></h1>
     <p class="intro">登录后进入外贸单据系统。</p>
     <form id="login-form">
-      <label for="username">用户名 / Email</label>
+      <label for="username">用户名或邮箱 <span class="en">Username or Email</span></label>
       <input id="username" name="username" autocomplete="username" required maxlength="128" autofocus>
-      <label for="password">密码</label>
+      <label for="password">密码 <span class="en">Password</span></label>
       <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
       <p id="login-error" role="alert" aria-live="polite"></p>
       <button type="submit">登录</button>
     </form>
-    <p class="phase-note">Server mode enabled.<br>登录后业务数据通过受保护API存储到SQLite。</p>
+    <p class="phase-note">服务器模式已启用 · Server mode enabled.<br>登录后业务数据通过受保护API存储到SQLite。</p>
   </main>
 </body>
 </html>

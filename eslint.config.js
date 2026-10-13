@@ -35,4 +35,9 @@ module.exports = [
     files: ['tests/**/*.js'],
     rules: { 'no-dupe-keys': 'warn', 'no-regex-spaces': 'warn' },
   },
+  {
+    // Node scripts whose functions are also evaluated inside a real browser page.
+    files: ['tests/browser/**/*.js'],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
+  },
 ];

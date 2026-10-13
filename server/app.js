@@ -35,6 +35,7 @@ const businessFiles = [
   'js/api-db.js',
   'js/sample-data.js',
   'js/pdf.js',
+  'js/i18n.js',
   'js/app.js',
   'node_modules/jspdf/dist/jspdf.umd.min.js',
   'node_modules/jspdf-autotable/dist/jspdf.plugin.autotable.min.js',

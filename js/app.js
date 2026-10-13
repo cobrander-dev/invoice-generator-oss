@@ -2,7 +2,10 @@
   'use strict';
   const C = window.FTCore,
     DB = window.FTDB,
-    PDF = window.FTPDF;
+    PDF = window.FTPDF,
+    I18N = window.FTI18N;
+  // Chinese label with a smaller English line (see js/i18n.js).
+  const bi = (zh, en) => I18N.bilingualHtml(zh, en);
   const state = {
     page: 'dashboard',
     user: null,
@@ -26,35 +29,42 @@
     pendingBackup: null,
     pendingBackupMeta: null,
     restorePoint: null,
+    // Archived customers/products and void orders, loaded only while their view is open.
+    archived: { customers: [], products: [], orders: [] },
   };
   const $ = (s, r = document) => r?.querySelector?.(s) || null,
     $$ = (s, r = document) => Array.from(r?.querySelectorAll?.(s) || []);
   const content = $('#page-content'),
     modal = $('#modal'),
     modalBody = $('#modal-body');
+  I18N.observe(content, modalBody);
+  // [Chinese title, English title, subtitle]
   const pageInfo = {
-    dashboard: ['首页仪表盘', '掌握订单、收款与交付状态'],
-    orders: ['订单管理', '搜索、筛选和管理外贸订单'],
-    'order-edit': ['订单编辑', '填写一次资料，生成 PI 与 CI'],
-    'packing-edit': ['Packing List编辑', '从已保存CI继承实际出货资料并维护包装数据'],
-    customers: ['客户管理', '集中管理 Buyer 与 Consignee 信息'],
-    products: ['产品管理', '维护产品参数、价格、重量与装箱数据'],
-    company: ['公司设置', '公司抬头、收款账户、签名与印章'],
-    preview: ['单据预览', '预览、打印和导出 PI、CI、Packing List'],
-    backup: ['数据备份', '导出、恢复和保护服务器业务数据'],
-    users: ['用户管理', '管理员工账号与业务归属'],
-    audit: ['操作日志', '查看服务器安全审计记录'],
-    account: ['我的账号', '查看账号资料并修改密码'],
-    help: ['使用帮助', '从设置到归档的完整操作指南'],
+    dashboard: ['首页仪表盘', 'Dashboard', '掌握订单、收款与交付状态'],
+    orders: ['订单管理', 'Orders', '搜索、筛选和管理外贸订单'],
+    'order-edit': ['订单编辑', 'Order Editor', '填写一次资料，生成 PI 与 CI'],
+    'packing-edit': ['装箱单编辑', 'Packing List', '从已保存的 CI 继承实际出货资料并维护包装数据'],
+    customers: ['客户管理', 'Customers', '集中管理买方与收货人资料'],
+    products: ['产品管理', 'Products', '维护产品参数、价格、重量与装箱数据'],
+    company: ['公司设置', 'Company Settings', '公司抬头、收款账户、签名与印章'],
+    preview: ['单据预览', 'Documents', '预览、打印和导出 PI、CI、Packing List'],
+    backup: ['数据备份', 'Backup', '导出、恢复和保护服务器业务数据'],
+    users: ['用户管理', 'Users', '管理员工账号与业务归属'],
+    audit: ['操作日志', 'Audit Log', '查看服务器安全审计记录'],
+    account: ['我的账号', 'My Account', '查看账号资料并修改密码'],
+    help: ['使用帮助', 'Help', '从设置到归档的完整操作指南'],
   };
+  const ROLE_LABELS = { ADMIN: '管理员', EMPLOYEE: '员工' };
+  const roleLabel = (role) => ROLE_LABELS[role] || role || '';
   const isAdmin = () => state.user?.role === 'ADMIN';
   function dataErrorMessage(err) {
+    if (err?.name === 'DeleteBlockedError') return err.message;
     if (err?.name === 'ConflictError')
       return '该记录已在其他会话中更新。当前修改尚未保存，请重新加载最新数据后再处理。';
     if (err?.name === 'AuthExpiredError') return '登录已过期，本次修改未保存。请重新登录后再处理。';
     if (err?.name === 'NetworkError' || err?.name === 'ServerError')
       return '服务器暂时无法访问，本次修改未保存。';
-    return err?.message || '服务器操作失败，本次修改未保存。';
+    return I18N.serverError(err?.message) || '服务器操作失败，本次修改未保存。';
   }
   function reportDataError(err) {
     console.error(err);
@@ -117,8 +127,8 @@
     render();
   }
   function render() {
-    const [title, sub] = pageInfo[state.page] || pageInfo.dashboard;
-    $('#page-title').textContent = title;
+    const [title, englishTitle, sub] = pageInfo[state.page] || pageInfo.dashboard;
+    $('#page-title').innerHTML = bi(title, englishTitle);
     $('#page-subtitle').textContent = sub;
     const map = {
       dashboard: renderDashboard,
@@ -137,10 +147,6 @@
     };
     content.innerHTML = (map[state.page] || renderDashboard)();
     if (state.page === 'company' && !isAdmin()) makeCompanyReadOnly();
-    $$('[data-delete-order]').forEach((button) => (button.textContent = '作废'));
-    $$('[data-delete-customer],[data-delete-product]').forEach(
-      (button) => (button.textContent = '归档'),
-    );
     if (state.page === 'order-edit') refineOrderEditor();
     if (state.page === 'order-edit') refineCIEditor();
     if (state.page === 'order-edit') syncOrderCalculations();
@@ -155,13 +161,13 @@
         : audit.dataset?.employeeLabel || '我的活动';
     const summary = $('#account-summary');
     if (summary && state.user)
-      summary.textContent = `${state.user.displayName || state.user.username} · ${state.user.role}`;
+      summary.textContent = `${state.user.displayName || state.user.username} · ${roleLabel(state.user.role)}`;
     if (!isAdmin()) {
       const backup = $('[data-page="backup"]');
       const group = backup?.closest?.('.nav-group');
       if (group) group.hidden = true;
-      pageInfo.company = ['公司资料', '公司抬头、收款账户和签章资料（只读）'];
-      pageInfo.audit = ['我的活动', '查看自己的操作记录'];
+      pageInfo.company = ['公司资料', 'Company Profile', '公司抬头、收款账户和签章资料（只读）'];
+      pageInfo.audit = ['我的活动', 'My Activity', '查看自己的操作记录'];
     }
   }
   function makeCompanyReadOnly() {
@@ -243,7 +249,7 @@
         );
     }
     const sectionTitles = {
-      basic: '1. 订单概览 / Buyer',
+      basic: '1. 订单概览 / Order Overview',
       products: '2. 产品明细',
       pi: '3. 交易与交付条件',
       amounts: '4. 金额与收款',
@@ -263,12 +269,10 @@
         groups.className = 'trade-groups';
         const trade = document.createElement('section');
         trade.className = 'trade-group';
-        trade.innerHTML =
-          '<div class="subsection-heading"><strong>Trade & Delivery</strong><span>交易与交付</span></div>';
+        trade.innerHTML = `<div class="subsection-heading"><strong>${bi('交易与交付', 'Trade & Delivery')}</strong></div>`;
         const payment = document.createElement('section');
         payment.className = 'trade-group payment-group';
-        payment.innerHTML =
-          '<div class="subsection-heading"><strong>Payment</strong><span>付款条件</span></div>';
+        payment.innerHTML = `<div class="subsection-heading"><strong>${bi('付款条件', 'Payment')}</strong></div>`;
         const take = (root, names, target) =>
           names.forEach((name) => {
             const field = root.querySelector(`[name="${name}"]`)?.closest('.field');
@@ -458,7 +462,7 @@
       const make = (className, title, subtitle, names) => {
         const section = document.createElement('section');
         section.className = `ci-group ${className}`;
-        section.innerHTML = `<div class="ci-subsection-heading"><strong>${title}</strong><span>${subtitle}</span></div>`;
+        section.innerHTML = `<div class="ci-subsection-heading"><strong>${bi(subtitle, title)}</strong></div>`;
         names.forEach((name) => {
           const field = grid.querySelector(`[name="${name}"]`)?.closest('.field');
           if (field) section.append(field);
@@ -503,7 +507,7 @@
         slot = document.createElement('section');
       slot.className = 'ci-subsection ci-products';
       slot.innerHTML =
-        '<div class="ci-subsection-heading"><strong>Actual Shipped Products</strong><span>PI Quantity 与 CI Quantity / Actual Shipped Quantity</span></div>';
+        '<div class="ci-subsection-heading"><strong>Actual Shipped Products</strong><span>PI 数量与 CI 实际出货数量</span></div>';
       if (productBody) {
         while (productBody.firstChild) slot.append(productBody.firstChild);
       }
@@ -561,8 +565,9 @@
     $('#toast-area').append(el);
     setTimeout(() => el.remove(), 3200);
   }
+  // title may be "中文 / English"; it is shown bilingual like page titles.
   function openModal(title, html, large = false) {
-    $('#modal-title').textContent = title;
+    $('#modal-title').innerHTML = I18N.label(title);
     modalBody.innerHTML = html;
     modal.classList.remove('hidden');
     $('.modal').classList.toggle('large', large);
@@ -573,15 +578,16 @@
     state.pendingBackup = null;
     state.pendingBackupMeta = null;
   }
+  // Stored statuses stay English; the badge shows Chinese with the stored value as tooltip.
   function statusBadge(s) {
-    const cl = ['Completed', 'Shipped', 'Balance Received'].includes(s)
+    const cl = ['Completed', 'Shipped', 'Balance Received', 'ACTIVE', 'SUCCESS'].includes(s)
       ? 'green'
       : ['In Production', 'Ready to Ship'].includes(s)
         ? 'blue'
-        : ['Cancelled'].includes(s)
+        : ['Cancelled', 'DISABLED', 'FAILURE'].includes(s)
           ? 'red'
           : 'amber';
-    return `<span class="badge ${cl}">${C.escapeHtml(s)}</span>`;
+    return `<span class="badge ${cl}" title="${C.escapeHtml(s)}">${C.escapeHtml(I18N.status(s))}</span>`;
   }
   function customerName(id) {
     const x = state.customers.find((c) => c.id === id);
@@ -666,16 +672,16 @@
   function field(label, name, value = '', type = 'text', extra = '') {
     const hidden = extra.includes('hidden'),
       attrs = extra.replace(/\bhidden\b/g, '').trim();
-    return `<div class="field" ${hidden ? 'hidden' : ''}><label ${attrs.includes('required') ? 'class="required"' : ''}>${label}</label><input type="${type}" name="${name}" value="${esc(value)}" ${attrs}></div>`;
+    return `<div class="field" ${hidden ? 'hidden' : ''}><label ${attrs.includes('required') ? 'class="required"' : ''}>${I18N.label(label)}</label><input type="${type}" name="${name}" value="${esc(value)}" ${attrs}></div>`;
   }
   function selectField(label, name, list, value = '', extra = '') {
-    return `<div class="field"><label ${extra.includes('required') ? 'class="required"' : ''}>${label}</label><select name="${name}" ${extra}>${options(list, value)}</select></div>`;
+    return `<div class="field"><label ${extra.includes('required') ? 'class="required"' : ''}>${I18N.label(label)}</label><select name="${name}" ${extra}>${options(list, value)}</select></div>`;
   }
   function textArea(label, name, value = '', extra = '') {
-    return `<div class="field ${extra.includes('span-') ? extra : ''}"><label>${label}</label><textarea name="${name}">${esc(value)}</textarea></div>`;
+    return `<div class="field ${extra.includes('span-') ? extra : ''}"><label>${I18N.label(label)}</label><textarea name="${name}">${esc(value)}</textarea></div>`;
   }
   function bankField(label, name, value = '', visible = true, hint = '', extraClass = '') {
-    return `<div class="field ${extraClass}" ${visible ? '' : `hidden`} data-bank-field="${name}"><label>${label}</label><input name="${name}" value="${esc(value)}">${hint ? `<small class="field-hint">${esc(hint)}</small>` : ''}</div>`;
+    return `<div class="field ${extraClass}" ${visible ? '' : `hidden`} data-bank-field="${name}"><label>${I18N.label(label)}</label><input name="${name}" value="${esc(value)}">${hint ? `<small class="field-hint">${esc(hint)}</small>` : ''}</div>`;
   }
   function objectOptions(list, value, valueKey = 'code', labelFn = (x) => x.label || x.code) {
     return list
@@ -686,14 +692,13 @@
       .join('');
   }
   function orderSection(id, title, body, { open = true, hidden = false, badge = '' } = {}) {
-    return `<details class="order-section" data-order-section="${esc(id)}" ${open ? 'open' : ''} ${hidden ? 'hidden' : ''}><summary><span>${title}</span>${badge ? `<span class="stage-badge">${esc(badge)}</span>` : ''}<span class="section-chevron">⌄</span></summary><div class="order-section-body">${body}</div></details>`;
+    return `<details class="order-section" data-order-section="${esc(id)}" ${open ? 'open' : ''} ${hidden ? 'hidden' : ''}><summary><span>${title}</span>${badge ? `<span class="stage-badge">${esc(I18N.status(badge))}</span>` : ''}<span class="section-chevron">⌄</span></summary><div class="order-section-body">${body}</div></details>`;
   }
 
   function renderDashboard() {
     const count = (s) => state.orders.filter((o) => o.status === s).length;
     const recent = state.orders.slice(0, 6);
-    const mode =
-        state.company?.documentMode === 'Test' ? 'Test / 测试样例' : 'Production / 正式生产',
+    const mode = state.company?.documentMode === 'Test' ? '测试样例 Test' : '正式生产 Production',
       lastBackup = state.lastBackupTime ? new Date(state.lastBackupTime) : null,
       backupOverdue = !lastBackup || Date.now() - lastBackup.getTime() > 7 * 86400000;
     return `<div class="grid stats-grid">
@@ -702,7 +707,7 @@
       <div class="stat"><div class="label">生产中</div><div class="value">${count('In Production')}</div><div class="hint">正在执行的订单</div></div>
       <div class="stat"><div class="label">待收尾款</div><div class="value">${count('Ready to Ship')}</div><div class="hint">可安排出货</div></div>
       <div class="stat"><div class="label">已发货</div><div class="value">${count('Shipped') + count('Completed')}</div><div class="hint">已发货或完成</div></div>
-    </div>${isAdmin() ? `<section class="panel dashboard-safety"><div class="panel-head"><div><span class="kicker">Server Environment</span><h2>Data Safety / Environment</h2></div><span class="badge ${backupOverdue ? 'amber' : 'green'}">${backupOverdue ? 'Backup recommended' : 'Up to date'}</span></div><div class="dashboard-safety-grid"><div><span>Document Mode</span><strong>${mode}</strong></div><div><span>Last Full Backup</span><strong>${lastBackup ? esc(lastBackup.toLocaleString('zh-CN')) : '尚未导出完整备份'}</strong></div><button class="btn small" data-page-link="backup">查看数据备份</button></div></section>` : ''}<div class="split"><section class="panel"><div class="panel-head"><h2>最近订单</h2><div class="actions"><button class="btn small" data-page-link="orders">查看全部</button></div></div>${ordersTable(recent)}</section>
+    </div>${isAdmin() ? `<section class="panel dashboard-safety"><div class="panel-head"><div><span class="kicker">Server Environment</span><h2>Data Safety / Environment</h2></div><span class="badge ${backupOverdue ? 'amber' : 'green'}">${backupOverdue ? '建议备份' : '已是最新'}</span></div><div class="dashboard-safety-grid"><div><span>Document Mode</span><strong>${mode}</strong></div><div><span>Last Full Backup</span><strong>${lastBackup ? esc(lastBackup.toLocaleString('zh-CN')) : '尚未导出完整备份'}</strong></div><button class="btn small" data-page-link="backup">查看数据备份</button></div></section>` : ''}<div class="split"><section class="panel"><div class="panel-head"><h2>最近订单</h2><div class="actions"><button class="btn small" data-page-link="orders">查看全部</button></div></div>${ordersTable(recent)}</section>
     <section class="panel"><div class="panel-head"><h2>快速操作</h2></div><div class="panel-body grid dashboard-quick-actions"><button class="btn" data-page-link="customers">客户管理</button><button class="btn" data-page-link="products">产品管理</button>${isAdmin() ? '<button class="btn" data-page-link="backup">数据备份</button>' : ''}<p class="dashboard-local-note">业务数据保存在当前服务器 SQLite 数据库。</p></div></section></div>`;
   }
   function ordersTable(rows) {
@@ -716,8 +721,9 @@
       .join('')}</tbody></table></div>`;
   }
   function renderOrders() {
-    const f = state.filters;
-    let rows = state.orders.filter((o) => {
+    const f = state.filters,
+      archivedView = isArchivedView('orders');
+    let rows = (archivedView ? state.archived.orders : state.orders).filter((o) => {
       const q = (f.q || '').toLowerCase(),
         text =
           `${o.orderNumber} ${o.piNumber} ${o.ciNumber} ${customerName(o.customerId)}`.toLowerCase();
@@ -729,13 +735,19 @@
         (!f.to || o.createdDate <= f.to)
       );
     });
-    return `<div class="toolbar"><div class="search"><input id="order-search" placeholder="搜索订单号、PI、CI 或客户" value="${esc(f.q || '')}"></div><select id="filter-customer"><option value="">全部客户</option>${state.customers.map((c) => `<option value="${esc(c.id)}" ${f.customer === c.id ? 'selected' : ''}>${esc(c.companyName || c.buyerName)}</option>`).join('')}</select><select id="filter-status"><option value="">全部状态</option>${options(C.STATUSES, f.status)}</select><input id="filter-from" type="date" value="${esc(f.from || '')}" title="开始日期"><input id="filter-to" type="date" value="${esc(f.to || '')}" title="结束日期"><button class="btn primary" data-action="new-order">＋ 新建订单</button></div>
-      <section class="panel">${ordersTableDetailed(rows)}</section>`;
+    return `<div class="toolbar"><div class="search"><input id="order-search" placeholder="搜索订单号、PI、CI 或客户" value="${esc(f.q || '')}"></div><select id="filter-customer"><option value="">全部客户</option>${state.customers.map((c) => `<option value="${esc(c.id)}" ${f.customer === c.id ? 'selected' : ''}>${esc(c.companyName || c.buyerName)}</option>`).join('')}</select><select id="filter-status"><option value="">全部状态</option>${options(C.STATUSES, f.status)}</select><input id="filter-from" type="date" value="${esc(f.from || '')}" title="开始日期"><input id="filter-to" type="date" value="${esc(f.to || '')}" title="结束日期">${recordViewSwitch('orders')}<button class="btn primary" data-action="new-order">＋ 新建订单</button></div>
+      <section class="panel">${ordersTableDetailed(rows, archivedView)}</section>`;
   }
-  function ordersTableDetailed(rows) {
+  function ordersTableDetailed(rows, archivedView = false) {
     if (!rows.length)
-      return `<div class="empty"><strong>没有匹配订单</strong>请调整筛选条件或创建新订单。</div>`;
-    return `<div class="table-wrap"><table><thead><tr><th>订单编号</th><th>单据编号</th><th>客户</th><th>日期</th><th>状态</th><th class="amount">金额</th><th>操作</th></tr></thead><tbody>${rows.map((o) => `<tr><td><strong>${esc(o.orderNumber)}</strong></td><td><div>${esc(o.piNumber)}</div><div class="record-sub">${esc(o.ciNumber || 'CI 未生成')} · ${esc(o.packingListNumber || 'PL 未生成')}</div></td><td>${esc(customerName(o.customerId))}</td><td>${esc(o.createdDate)}</td><td>${statusBadge(o.status)}</td><td class="amount">${C.formatMoney(C.calculateOrder(o).total, o.currency)}</td><td><button class="btn small" data-edit-order="${esc(o.id)}">编辑</button> <button class="btn small" data-copy-order="${esc(o.id)}">复制</button> <button class="btn small" data-preview-order="${esc(o.id)}">单据</button> <button class="btn small danger" data-delete-order="${esc(o.id)}">删除</button></td></tr>`).join('')}</tbody></table></div>`;
+      return archivedView
+        ? `<div class="empty"><strong>没有已作废的订单</strong>作废的订单会显示在这里，可以恢复；没有正式单据和收款记录的草稿订单也可以永久删除。</div>`
+        : `<div class="empty"><strong>没有匹配订单</strong>请调整筛选条件或创建新订单。</div>`;
+    const actions = (o) =>
+      archivedView
+        ? lifecycleActions('orders', o.id)
+        : `<button class="btn small" data-edit-order="${esc(o.id)}">编辑</button> <button class="btn small" data-copy-order="${esc(o.id)}">复制</button> <button class="btn small" data-preview-order="${esc(o.id)}">单据</button> ${lifecycleActions('orders', o.id)}`;
+    return `<div class="table-wrap"><table><thead><tr><th>订单编号</th><th>单据编号</th><th>客户</th><th>日期</th><th>状态</th><th class="amount">金额</th><th>操作</th></tr></thead><tbody>${rows.map((o) => `<tr><td><strong>${esc(o.orderNumber)}</strong></td><td><div>${esc(o.piNumber)}</div><div class="record-sub">${esc(o.ciNumber || 'CI 未生成')} · ${esc(o.packingListNumber || 'PL 未生成')}</div></td><td>${esc(customerName(o.customerId))}</td><td>${esc(o.createdDate)}</td><td>${statusBadge(o.status)}</td><td class="amount">${C.formatMoney(C.calculateOrder(o).total, o.currency)}</td><td><div class="order-actions">${actions(o)}</div></td></tr>`).join('')}</tbody></table></div>`;
   }
 
   function renderOrderEdit() {
@@ -808,11 +820,11 @@
       stampUploaded = Boolean(currentStamp),
       stampApproved = stampUploaded && !rejectedStampFileName(state.company.stampFileName),
       electronicReady = finalReady && signatureUploaded && stampApproved;
-    const signingStatus = `<section class="pi-signing-status"><div class="pi-signing-copy"><strong>Final PI签章状态 / Signing Assets</strong><span>电子签章版只读取公司资料中实际上传的图片；Final快照生成后将锁定当时的签章版本。</span>${finalCheck.errors.length ? `<div class="field-error" data-final-pi-errors>Final条件未满足：${esc(finalCheck.errors.join('；'))}</div>` : '<div class="signing-ready" data-final-pi-errors>Final必填资料已完整</div>'}</div><div class="signing-asset"><div class="signing-thumb">${currentSignature ? `<img src="${esc(currentSignature)}" alt="Signature Image preview">` : '<span>无图片</span>'}</div><strong>签名状态：${signatureUploaded ? '已上传' : '未上传'}</strong><small>Signature Image · ${esc(state.company?.authorizedSignatoryName || 'Authorized Signatory')}</small></div><div class="signing-asset"><div class="signing-thumb stamp-thumb">${currentStamp ? `<img src="${esc(currentStamp)}" alt="Company Stamp Image preview">` : '<span>无图片</span>'}</div><strong>公司公章状态：${stampApproved ? '已上传' : stampUploaded ? '需替换原始透明PNG' : '未上传'}</strong><small>Company Stamp Image · 公司正式公章</small></div></section>`;
+    const signingStatus = `<section class="pi-signing-status"><div class="pi-signing-copy"><strong>Final PI签章状态 / Signing Assets</strong><span>电子签章版只读取公司资料中实际上传的图片；Final快照生成后将锁定当时的签章版本。</span>${finalCheck.errors.length ? `<div class="field-error" data-final-pi-errors>Final条件未满足：${esc(finalCheck.errors.join('；'))}</div>` : '<div class="signing-ready" data-final-pi-errors>Final必填资料已完整</div>'}</div><div class="signing-asset"><div class="signing-thumb">${currentSignature ? `<img src="${esc(currentSignature)}" alt="Signature Image preview">` : '<span>无图片</span>'}</div><strong>签名状态：${signatureUploaded ? '已上传' : '未上传'}</strong><small>签名图片 · ${esc(state.company?.authorizedSignatoryName || '授权签字人')}</small></div><div class="signing-asset"><div class="signing-thumb stamp-thumb">${currentStamp ? `<img src="${esc(currentStamp)}" alt="Company Stamp Image preview">` : '<span>无图片</span>'}</div><strong>公司公章状态：${stampApproved ? '已上传' : stampUploaded ? '需替换原始透明PNG' : '未上传'}</strong><small>公司印章图片 · 公司正式公章</small></div></section>`;
     const basic = `<div class="form-grid"><div class="field"><label class="required">订单号 / Order Number</label><div class="readonly-with-action"><input name="orderNumber" value="${esc(o.orderNumber)}" readonly><button type="button" class="btn small" data-regenerate-numbers ${numbersLocked ? 'disabled' : ''}>重新生成编号</button></div></div>${field('PI编号 / PI Number', 'piNumber', o.piNumber, 'text', 'required readonly')}${hasCI ? field('商业发票编号 / CI Number', 'ciNumber', o.ciNumber, 'text', 'readonly') : ''}${hasPL ? field('装箱单编号 / Packing List Number', 'packingListNumber', o.packingListNumber, 'text', 'readonly') : ''}<div class="field span-2"><label class="required">买方 / Buyer</label><div class="inline-field"><select name="customerId" required>${customerOpts}</select><button type="button" class="btn" data-new-customer>新增</button></div></div>${selectField('币种 / Currency', 'currency', C.CURRENCIES, o.currency, 'required')}${selectField('订单状态 / Order Status', 'status', C.STATUSES, o.status)}${field('创建日期 / Created Date', 'createdDate', o.createdDate, 'date')}${field('有效期至 / Valid Until', 'validUntil', o.validUntil, 'date')}</div>`;
     const piHistory = (o.piHistory || []).slice().sort((a, b) => b.revision - a.revision),
       historyHtml = piHistory.length
-        ? `<div class="pi-history"><div class="panel-head compact-head"><strong>PI历史 / PI History</strong><button type="button" class="btn small primary" data-create-pi-revision ${C.needsPIRevision(o) ? '' : 'disabled'}>创建Revised PI</button></div>${piHistory.map((x) => `<div class="history-row"><span><strong>${esc(x.displayNumber || x.number)}</strong> · Revision ${x.revision} · Final</span><time>${esc((x.finalizedAt || '').replace('T', ' ').slice(0, 19))}</time><button type="button" class="btn small" data-preview-pi-revision="${x.revision}">查看/导出</button></div>`).join('')}</div>`
+        ? `<div class="pi-history"><div class="panel-head compact-head"><strong>PI历史 / PI History</strong><button type="button" class="btn small primary" data-create-pi-revision ${C.needsPIRevision(o) ? '' : 'disabled'}>创建Revised PI</button></div>${piHistory.map((x) => `<div class="history-row"><span><strong>${esc(x.displayNumber || x.number)}</strong> · 修订版 ${x.revision} · Final</span><time>${esc((x.finalizedAt || '').replace('T', ' ').slice(0, 19))}</time><button type="button" class="btn small" data-preview-pi-revision="${x.revision}">查看/导出</button></div>`).join('')}</div>`
         : '';
     const pi = `<datalist id="common-port-presets">${C.PORT_PRESETS.map((x) => `<option value="${esc(x)}"></option>`).join('')}</datalist><div class="form-grid"><div class="field span-2"><label class="required">贸易条款 / Trade Term</label><select name="incotermCode">${objectOptions(C.INCOTERMS, o.incotermCode, 'code', (x) => `${x.code} — ${x.englishName}（${x.chineseName}）`)}</select><input type="hidden" name="incotermEnglishName" value="${esc(o.incotermEnglishName)}"><input type="hidden" name="incotermVersion" value="Incoterms® 2020"><small class="incoterm-badge">Incoterms® 2020</small></div><div class="field span-2"><label class="required">${esc(C.namedPlaceLabel(o.incotermCode))} / 指定港口或地点</label><input name="namedPlace" value="${esc(o.namedPlace || '')}" list="common-port-presets" required placeholder="Yantian Port, Shenzhen, China"><small class="field-hint">可选择常用港口，也可直接输入自定义地点。</small></div><div class="field span-2 checkbox-field"><label><input type="checkbox" name="namedPlaceConfirmed" ${o.namedPlaceConfirmed ? 'checked' : ''}> 已核对指定港口或地点 / Confirmed for Final export</label></div><div class="field span-2"><label class="required">付款条件 / Payment Term</label><select name="paymentTermPreset">${objectOptions(C.PAYMENT_TERMS, o.paymentTermPreset, 'label', (x) => x.label)}</select></div>${field('自定义付款条件 / Custom Payment Term', 'paymentTermCustom', o.paymentTermCustom || '', 'text', o.paymentTermPreset === 'Custom' ? '' : 'hidden')}${field('交货时间 / Delivery Time', 'deliveryTime', o.deliveryTime, 'text', 'required')}${selectField('计划运输方式 / Planned Transport Method', 'plannedTransportMethod', C.TRANSPORT_METHODS, o.plannedTransportMethod)}${field('其他计划运输方式', 'plannedTransportMethodOther', o.plannedTransportMethodOther || '', 'text', o.plannedTransportMethod === 'Other' ? '' : 'hidden')}${field('原产国 / Country of Origin', 'countryOfOrigin', o.countryOfOrigin)}<div class="field span-2"><label>收款账户 / Payment Account</label><select name="paymentAccountId">${accountOpts}</select>${!matchingAccounts.length ? `<small class="field-error">没有 ${esc(o.currency)} 收款账户，Draft可保存，Final PI不可导出。</small>` : ''}${accountSummary}</div>${textArea('内部备注 / Internal Notes', 'internalNotes', o.internalNotes, 'span-4')}<div class="span-4 remarks-panel"><div class="field remarks-input"><label>客户可见备注 / Customer-facing Remarks</label><textarea name="customerRemarks" rows="3">${esc(o.customerRemarks)}</textarea></div><fieldset class="remark-switches"><legend>显示范围 / Display on</legend><label><input type="checkbox" name="showCustomerRemarksOnPI" ${o.showCustomerRemarksOnPI ? 'checked' : ''}><span>在PI中显示 / Show on PI</span></label><label><input type="checkbox" name="showCustomerRemarksOnCI" ${o.showCustomerRemarksOnCI ? 'checked' : ''}><span>在CI中显示 / Show on CI</span></label><label><input type="checkbox" name="showCustomerRemarksOnPL" ${o.showCustomerRemarksOnPL ? 'checked' : ''}><span>在Packing List中显示 / Show on Packing List</span></label></fieldset></div></div><div id="trade-warning" class="validation-stack">${warnings.map((x) => `<div class="warning">${esc(x)}</div>`).join('')}</div>${historyHtml}`;
     const ciDiffs = o.ciDocument?.differences || [],
@@ -822,7 +834,7 @@
     const ciStageActions = hasCI
       ? `<div class="stage-actions"><button type="button" class="btn" data-preview-stage="CI">预览CI</button>${hasPL ? `<button type="button" class="btn primary" data-edit-packing-list="${esc(o.packingListDocument?.id || state.packingLists.find((x) => x.orderId === o.id)?.id || '')}">编辑Packing List</button>` : `<button type="button" class="btn primary" data-generate-pl ${saved ? '' : 'disabled'}>从CI生成Packing List</button>`}</div>`
       : '';
-    const actual = `<div class="section-note">PI仅保留预计运输方式。以下内容属于独立CI实际发货数据，预计运输方式只是建议值，必须人工确认。</div><div class="related-document">Related PI: <strong>${esc(o.ciDocument?.relatedPiNumber || o.piNumber)}</strong> · Revision <strong>${esc(o.ciDocument?.relatedPiRevision ?? 'Draft')}</strong></div><div class="form-grid">${field('实际发货日期 Actual Shipment Date', 'actualShipmentDate', C.actualShipmentDate(o), 'date', ['Shipped', 'Completed'].includes(o.status) ? 'required' : '')}${selectField('实际运输方式 Actual Transport Method', 'actualTransportMethod', ['', ...C.TRANSPORT_METHODS], o.actualTransportMethod)}${field('其他实际运输方式', 'actualTransportMethodOther', o.actualTransportMethodOther || '', 'text', o.actualTransportMethod === 'Other' ? '' : 'hidden')}<div class="field checkbox-field"><label><input type="checkbox" name="actualTransportConfirmed" ${o.actualTransportConfirmed ? 'checked' : ''}> 已确认实际运输方式</label></div>${field('物流公司 / 承运人', 'carrier', o.carrier || '')}${selectField('运输单据类型', 'transportDocumentType', ['', ...C.TRANSPORT_DOCUMENT_TYPES], o.transportDocumentType)}${field('其他运输单据类型', 'transportDocumentTypeOther', o.transportDocumentTypeOther || '', 'text', o.transportDocumentType === 'Other' ? '' : 'hidden')}${field('运输单据号码', 'transportDocumentNumber', o.transportDocumentNumber || '')}${field('船名 / 航班号', 'vesselFlightNumber', o.vesselFlightNumber || '')}${field('装运港 Port of Loading', 'portOfLoading', o.portOfLoading || '')}${field('卸货港 Port of Discharge', 'portOfDischarge', o.portOfDischarge || '')}${field('预计到达日期', 'estimatedArrivalDate', o.estimatedArrivalDate || '', 'date')}${selectField('发货用途 Purpose of Shipment', 'purposeOfShipment', C.PURPOSES, o.purposeOfShipment)}${field('其他用途', 'purposeOfShipmentOther', o.purposeOfShipmentOther || '', 'text', o.purposeOfShipment === 'Other' ? '' : 'hidden')}${textArea('声明 Declaration', 'declaration', o.declaration, 'span-4')}<div class="field span-2 checkbox-field"><label><input type="checkbox" name="showPaymentStatusOnCI" ${o.showPaymentStatusOnCI ? 'checked' : ''}> 在CI中显示付款状态 Show payment status on CI</label></div></div>${diffHtml}${ciStageActions}`;
+    const actual = `<div class="section-note">PI仅保留预计运输方式。以下内容属于独立CI实际发货数据，预计运输方式只是建议值，必须人工确认。</div><div class="related-document">Related PI: <strong>${esc(o.ciDocument?.relatedPiNumber || o.piNumber)}</strong> · 修订版 <strong>${esc(o.ciDocument?.relatedPiRevision ?? 'Draft')}</strong></div><div class="form-grid">${field('实际发货日期 Actual Shipment Date', 'actualShipmentDate', C.actualShipmentDate(o), 'date', ['Shipped', 'Completed'].includes(o.status) ? 'required' : '')}${selectField('实际运输方式 Actual Transport Method', 'actualTransportMethod', ['', ...C.TRANSPORT_METHODS], o.actualTransportMethod)}${field('其他实际运输方式', 'actualTransportMethodOther', o.actualTransportMethodOther || '', 'text', o.actualTransportMethod === 'Other' ? '' : 'hidden')}<div class="field checkbox-field"><label><input type="checkbox" name="actualTransportConfirmed" ${o.actualTransportConfirmed ? 'checked' : ''}> 已确认实际运输方式</label></div>${field('物流公司 / 承运人', 'carrier', o.carrier || '')}${selectField('运输单据类型', 'transportDocumentType', ['', ...C.TRANSPORT_DOCUMENT_TYPES], o.transportDocumentType)}${field('其他运输单据类型', 'transportDocumentTypeOther', o.transportDocumentTypeOther || '', 'text', o.transportDocumentType === 'Other' ? '' : 'hidden')}${field('运输单据号码', 'transportDocumentNumber', o.transportDocumentNumber || '')}${field('船名 / 航班号', 'vesselFlightNumber', o.vesselFlightNumber || '')}${field('装运港 Port of Loading', 'portOfLoading', o.portOfLoading || '')}${field('卸货港 Port of Discharge', 'portOfDischarge', o.portOfDischarge || '')}${field('预计到达日期', 'estimatedArrivalDate', o.estimatedArrivalDate || '', 'date')}${selectField('发货用途 Purpose of Shipment', 'purposeOfShipment', C.PURPOSES, o.purposeOfShipment)}${field('其他用途', 'purposeOfShipmentOther', o.purposeOfShipmentOther || '', 'text', o.purposeOfShipment === 'Other' ? '' : 'hidden')}${textArea('声明 Declaration', 'declaration', o.declaration, 'span-4')}<div class="field span-2 checkbox-field"><label><input type="checkbox" name="showPaymentStatusOnCI" ${o.showPaymentStatusOnCI ? 'checked' : ''}> 在CI中显示付款状态 Show payment status on CI</label></div></div>${diffHtml}${ciStageActions}`;
     const products = o.items.length
       ? `<div class="product-toolbar"><span class="muted small-text">默认显示交易字段，展开后编辑产品、重量和包装资料。</span><div class="actions"><button type="button" class="btn small" data-add-product-library>从产品库选择</button><button type="button" class="btn small primary" data-add-line>＋ 新增空白产品</button></div></div>${renderItemTable(o.items, { hasCI, hasPL })}`
       : renderItemTable(o.items, { hasCI, hasPL });
@@ -1104,7 +1116,7 @@
       : `<div class="empty compact-empty product-empty"><strong>还没有产品明细</strong><span>从产品库选择或新增空白产品。</span><div class="empty-actions"><button type="button" class="btn" data-add-product-library>从产品库选择</button><button type="button" class="btn primary" data-add-line>新增空白产品</button></div></div>`;
   }
   function itemRow(i, n, { hasCI = false, hasPL = false } = {}) {
-    return `<article class="item-card" data-line="${n}"><div class="item-main-grid"><div class="item-number">${n + 1}</div>${field('Product Description', 'description', i.description || '', 'text', 'required')}${field('Model / SKU', 'modelSku', C.formatModelSku(i.modelSku || ''))}${field('Quantity', 'quantity', i.quantity, 'number', 'min="0" step="any" required')}${selectField('Unit', 'unit', C.UNITS, i.unit)}${field('Unit Price', 'unitPrice', i.unitPrice, 'number', 'min="0" step="0.01"')}${field('Amount', 'amount', C.money(i.amount).toFixed(2), 'text', 'readonly')}<div class="item-actions"><button type="button" class="btn small" data-copy-line="${n}">复制</button><button type="button" class="btn small danger" data-delete-line="${n}">删除</button></div></div><details class="item-details"><summary>展开产品及包装详情</summary><div class="item-detail-grid"><fieldset><legend>Product Details</legend>${field('Material', 'material', i.material || '')}${field('HS Code', 'hsCode', i.hsCode || '')}<small class="field-hint">HS Code must be confirmed by the customs broker or declarant.</small>${field('Country of Origin', 'countryOfOrigin', i.countryOfOrigin || 'China')}</fieldset><fieldset><legend>Weight Details</legend>${field('Net Weight per Unit', 'netWeight', i.netWeight || 0, 'number', 'min="0" step="0.001"')}${field('Gross Weight per Unit', 'grossWeight', i.grossWeight || 0, 'number', 'min="0" step="0.001"')}${hasCI ? field('CI Quantity', 'ciQuantity', i.ciQuantity, 'number', 'min="0" step="any"') : ''}${hasPL ? field('Packing List Quantity', 'packingQuantity', i.packingQuantity, 'number', 'min="0" step="any"') : ''}</fieldset><fieldset class="packing-fields"><legend>Packing Details</legend>${field('Carton Quantity', 'cartonQty', i.cartonQty || 0, 'number', 'min="0" step="1"')}${field('Quantity per Carton', 'quantityPerCarton', i.quantityPerCarton || 0, 'number', 'min="0" step="any"')}${field('Carton Number', 'cartonNumber', i.cartonNumber || '')}${field('Carton Length (cm)', 'cartonLength', i.cartonLength || 0, 'number', 'min="0" step="any"')}${field('Carton Width (cm)', 'cartonWidth', i.cartonWidth || 0, 'number', 'min="0" step="any"')}${field('Carton Height (cm)', 'cartonHeight', i.cartonHeight || 0, 'number', 'min="0" step="any"')}${field('CBM', 'cbm', C.asNumber(i.cbm).toFixed(3), 'text', 'readonly')}<div class="item-warning" data-item-warning></div></fieldset></div></details></article>`;
+    return `<article class="item-card" data-line="${n}"><div class="item-main-grid"><div class="item-number">${n + 1}</div>${field('Product Description', 'description', i.description || '', 'text', 'required')}${field('Model / SKU', 'modelSku', C.formatModelSku(i.modelSku || ''))}${field('Quantity', 'quantity', i.quantity, 'number', 'min="0" step="any" required')}${selectField('Unit', 'unit', C.UNITS, i.unit)}${field('Unit Price', 'unitPrice', i.unitPrice, 'number', 'min="0" step="0.01"')}${field('Amount', 'amount', C.money(i.amount).toFixed(2), 'text', 'readonly')}<div class="item-actions"><button type="button" class="btn small" data-copy-line="${n}">复制</button><button type="button" class="btn small danger" data-delete-line="${n}">删除</button></div></div><details class="item-details"><summary>展开产品及包装详情</summary><div class="item-detail-grid"><fieldset><legend>Product Details</legend>${field('Material', 'material', i.material || '')}${field('HS Code', 'hsCode', i.hsCode || '')}<small class="field-hint">HS Code must be confirmed by the customs broker or declarant.</small>${field('Country of Origin', 'countryOfOrigin', i.countryOfOrigin || 'China')}</fieldset><fieldset><legend>Weight Details</legend>${field('Net Weight per Unit', 'netWeight', i.netWeight || 0, 'number', 'min="0" step="0.001"')}${field('Gross Weight per Unit', 'grossWeight', i.grossWeight || 0, 'number', 'min="0" step="0.001"')}${hasCI ? field('CI Quantity', 'ciQuantity', i.ciQuantity, 'number', 'min="0" step="any"') : ''}${hasPL ? field('Packing List Quantity', 'packingQuantity', i.packingQuantity, 'number', 'min="0" step="any"') : ''}</fieldset><fieldset class="packing-fields"><legend>Packing Details</legend>${field('箱数 / Carton Quantity', 'cartonQty', i.cartonQty || 0, 'number', 'min="0" step="1"')}${field('Quantity per Carton', 'quantityPerCarton', i.quantityPerCarton || 0, 'number', 'min="0" step="any"')}${field('Carton Number', 'cartonNumber', i.cartonNumber || '')}${field('Carton Length (cm)', 'cartonLength', i.cartonLength || 0, 'number', 'min="0" step="any"')}${field('Carton Width (cm)', 'cartonWidth', i.cartonWidth || 0, 'number', 'min="0" step="any"')}${field('Carton Height (cm)', 'cartonHeight', i.cartonHeight || 0, 'number', 'min="0" step="any"')}${field('CBM', 'cbm', C.asNumber(i.cbm).toFixed(3), 'text', 'readonly')}<div class="item-warning" data-item-warning></div></fieldset></div></details></article>`;
   }
   function renderAttachments(files) {
     return files.length
@@ -1114,7 +1126,7 @@
   function renderPaymentRecords(records, currency) {
     if (!records.length)
       return `<div class="dropzone payment-empty">暂无收款记录。添加并将状态设为 Confirmed 后，Amount Paid 会自动汇总。</div>`;
-    return `<div class="payment-record-list">${records.map((r, i) => `<article class="payment-record" data-payment-record="${i}"><div class="payment-record-title"><strong>收款 ${i + 1}</strong><span class="badge ${r.status === 'Confirmed' ? 'green' : r.status === 'Rejected' ? 'red' : 'amber'}" data-payment-status-badge>${esc(r.status)}</span><button type="button" class="btn small danger" data-delete-payment-record="${i}">删除</button></div><div class="form-grid">${field('收款日期 / Payment Date', 'paymentDate', r.paymentDate || '', 'date')}${field('金额 / Amount', 'paymentAmount', r.amount || 0, 'number', 'min="0" step="0.01"')}${selectField('币种 / Currency', 'paymentCurrency', C.CURRENCIES, r.currency || currency)}${selectField('收款方式 / Payment Method', 'paymentMethod', [...new Set([...C.PAYMENT_METHODS, r.paymentMethod].filter(Boolean))], r.paymentMethod || '')}${field('交易参考号 / Transaction Reference', 'transactionReference', r.transactionReference || '')}${selectField('状态 / Status', 'paymentStatus', C.PAYMENT_RECORD_STATUSES, r.status || 'Pending')} ${textArea('备注 / Notes', 'paymentNotes', r.notes || '', 'span-2')}<div class="field span-2"><label>付款水单 / Payment Slip Attachment</label><div class="slip-actions">${r.paymentSlip ? `<span>${esc(r.paymentSlip.name)} · ${(r.paymentSlip.size / 1024).toFixed(1)} KB</span><button type="button" class="btn small" data-view-payment-slip="${i}">查看</button><button type="button" class="btn small danger" data-remove-payment-slip="${i}">删除</button>` : '<span class="muted">未上传</span>'}<button type="button" class="btn small" data-upload-payment-slip="${i}">上传水单</button></div></div><div class="warning span-4" data-payment-currency-warning ${r.currency && r.currency !== currency ? '' : 'hidden'}>收款币种 ${esc(r.currency)} 与订单币种 ${esc(currency)} 不一致，请核对。</div></div></article>`).join('')}</div>`;
+    return `<div class="payment-record-list">${records.map((r, i) => `<article class="payment-record" data-payment-record="${i}"><div class="payment-record-title"><strong>收款 ${i + 1}</strong><span class="badge ${r.status === 'Confirmed' ? 'green' : r.status === 'Rejected' ? 'red' : 'amber'}" data-payment-status-badge>${esc(I18N.status(r.status))}</span><button type="button" class="btn small danger" data-delete-payment-record="${i}">删除</button></div><div class="form-grid">${field('收款日期 / Payment Date', 'paymentDate', r.paymentDate || '', 'date')}${field('金额 / Amount', 'paymentAmount', r.amount || 0, 'number', 'min="0" step="0.01"')}${selectField('币种 / Currency', 'paymentCurrency', C.CURRENCIES, r.currency || currency)}${selectField('收款方式 / Payment Method', 'paymentMethod', [...new Set([...C.PAYMENT_METHODS, r.paymentMethod].filter(Boolean))], r.paymentMethod || '')}${field('交易参考号 / Transaction Reference', 'transactionReference', r.transactionReference || '')}${selectField('状态 / Status', 'paymentStatus', C.PAYMENT_RECORD_STATUSES, r.status || 'Pending')} ${textArea('备注 / Notes', 'paymentNotes', r.notes || '', 'span-2')}<div class="field span-2"><label>付款水单 / Payment Slip Attachment</label><div class="slip-actions">${r.paymentSlip ? `<span>${esc(r.paymentSlip.name)} · ${(r.paymentSlip.size / 1024).toFixed(1)} KB</span><button type="button" class="btn small" data-view-payment-slip="${i}">查看</button><button type="button" class="btn small danger" data-remove-payment-slip="${i}">删除</button>` : '<span class="muted">未上传</span>'}<button type="button" class="btn small" data-upload-payment-slip="${i}">上传水单</button></div></div><div class="warning span-4" data-payment-currency-warning ${r.currency && r.currency !== currency ? '' : 'hidden'}>收款币种 ${esc(r.currency)} 与订单币种 ${esc(currency)} 不一致，请核对。</div></div></article>`).join('')}</div>`;
   }
 
   function readOrderForm() {
@@ -1297,7 +1309,7 @@
         warning.textContent = `收款币种 ${record.currency} 与订单币种 ${o.currency} 不一致，请核对。`;
       }
       if (badge) {
-        badge.textContent = record.status;
+        badge.textContent = I18N.status(record.status);
         badge.className = `badge ${record.status === 'Confirmed' ? 'green' : record.status === 'Rejected' ? 'red' : 'amber'}`;
       }
     });
@@ -1453,11 +1465,13 @@
 
   function renderCustomers() {
     const f = state.filters,
+      archivedView = isArchivedView('customers'),
+      source = archivedView ? state.archived.customers : state.customers,
       q = (f.customerQ || '').toLowerCase(),
       countries = [
-        ...new Set(state.customers.map((c) => String(c.country || '').trim()).filter(Boolean)),
+        ...new Set(source.map((c) => String(c.country || '').trim()).filter(Boolean)),
       ].sort((a, b) => a.localeCompare(b));
-    let rows = state.customers.filter((c) => {
+    let rows = source.filter((c) => {
       const text =
         `${c.buyerName} ${c.companyName} ${c.contactPerson} ${c.country} ${c.email}`.toLowerCase();
       return (
@@ -1466,10 +1480,6 @@
         (!f.customerCountry || c.country === f.customerCountry)
       );
     });
-    const customerLabel = (c) =>
-      c.companyName && c.buyerType === 'Company'
-        ? c.companyName
-        : c.buyerName || c.companyName || '-';
     rows = rows.map((c, index) => ({ ...c, __index: index }));
     const sort = f.customerSort || 'name';
     rows.sort((a, b) => {
@@ -1485,53 +1495,95 @@
       return customerLabel(a).localeCompare(customerLabel(b)) || a.__index - b.__index;
     });
     const countryOptions = `<option value="">All Countries</option>${countries.map((country) => `<option value="${esc(country)}" ${f.customerCountry === country ? 'selected' : ''}>${esc(country)}</option>`).join('')}`;
-    const empty = state.customers.length
-      ? `<div class="empty customer-empty"><strong>暂无匹配客户</strong><span>请调整搜索或筛选条件。</span></div>`
-      : `<div class="empty customer-empty"><strong>暂无客户</strong><span>创建客户后，可在订单中直接选择Buyer，并用于PI、CI和Packing List。</span><button class="btn primary" data-new-customer>＋ 新增客户</button></div>`;
-    return `<div class="toolbar customer-toolbar"><div class="search customer-search"><label class="sr-only" for="customer-search">搜索客户</label><input id="customer-search" placeholder="搜索公司、Buyer、联系人、国家或邮箱" value="${esc(f.customerQ || '')}"></div><label class="customer-filter"><span>Buyer Type</span><select id="customer-type-filter"><option value="">All Types</option><option value="Company" ${f.customerType === 'Company' ? 'selected' : ''}>Company</option><option value="Individual" ${f.customerType === 'Individual' ? 'selected' : ''}>Individual</option></select></label><label class="customer-filter"><span>Country</span><select id="customer-country-filter">${countryOptions}</select></label><label class="customer-filter customer-sort"><span>Sort</span><select id="customer-sort"><option value="name" ${sort === 'name' ? 'selected' : ''}>Company / Buyer Name</option><option value="country" ${sort === 'country' ? 'selected' : ''}>Country</option><option value="updated" ${sort === 'updated' ? 'selected' : ''}>Recently Updated</option></select></label><button class="btn primary customer-new" data-new-customer>＋ 新增客户</button></div><section class="panel customer-list-panel">${
+    const empty = archivedView
+      ? `<div class="empty customer-empty"><strong>没有已归档的客户</strong><span>归档的客户会显示在这里，可以恢复或永久删除。</span></div>`
+      : source.length
+        ? `<div class="empty customer-empty"><strong>暂无匹配客户</strong><span>请调整搜索或筛选条件。</span></div>`
+        : `<div class="empty customer-empty"><strong>暂无客户</strong><span>创建客户后，可在订单中直接选择买方，并用于 PI、CI 和 Packing List。</span><button class="btn primary" data-new-customer>＋ 新增客户</button></div>`;
+    const orderCounts = new Map();
+    for (const o of state.orders)
+      orderCounts.set(o.customerId, (orderCounts.get(o.customerId) || 0) + 1);
+    return `<div class="toolbar customer-toolbar"><div class="search customer-search"><label class="sr-only" for="customer-search">搜索客户</label><input id="customer-search" placeholder="搜索公司、买方、联系人、国家或邮箱" value="${esc(f.customerQ || '')}"></div><label class="customer-filter"><span>${I18N.label('Buyer Type')}</span><select id="customer-type-filter"><option value="">All Types</option><option value="Company" ${f.customerType === 'Company' ? 'selected' : ''}>Company</option><option value="Individual" ${f.customerType === 'Individual' ? 'selected' : ''}>Individual</option></select></label><label class="customer-filter"><span>${I18N.label('Country')}</span><select id="customer-country-filter">${countryOptions}</select></label><label class="customer-filter customer-sort"><span>${bi('排序', 'Sort')}</span><select id="customer-sort"><option value="name" ${sort === 'name' ? 'selected' : ''}>Company / Buyer Name</option><option value="country" ${sort === 'country' ? 'selected' : ''}>Country</option><option value="updated" ${sort === 'updated' ? 'selected' : ''}>Recently Updated</option></select></label>${recordViewSwitch('customers')}<button class="btn primary customer-new" data-new-customer>＋ 新增客户</button></div><section class="panel customer-list-panel">${
       rows.length
         ? `<div class="table-wrap"><table class="customer-table"><thead><tr><th>Customer</th><th>Country</th><th>Contact</th><th>Contact Details</th><th>Consignee</th><th>Actions</th></tr></thead><tbody>${rows
             .map((c) => {
               const label = customerLabel(c),
                 buyer = c.buyerName && c.buyerName !== label ? c.buyerName : '',
+                count = orderCounts.get(c.id) || 0,
                 secondary = [buyer, c.registrationNumber]
                   .filter(Boolean)
                   .filter((value, index, array) => array.indexOf(value) === index)
                   .join(' · ');
-              return `<tr><td><div class="record-cell"><div class="avatar">${esc(label.slice(0, 1).toUpperCase())}</div><div><div class="record-title">${esc(label)}</div>${secondary ? `<div class="record-sub">${esc(secondary)}</div>` : ''}</div></div></td><td><span class="customer-country">${esc(c.country || '-')}</span></td><td>${esc(c.contactPerson || '-')}</td><td><div>${esc(c.email || '-')}</div><div class="record-sub">${esc(c.telephone || '-')}</div></td><td>${esc(c.consigneeName || '—')}</td><td><div class="customer-actions"><button class="btn small" data-edit-customer="${esc(c.id)}">编辑</button><button class="btn small danger" data-delete-customer="${esc(c.id)}">删除</button></div></td></tr>`;
+              return `<tr><td><div class="record-cell"><div class="avatar">${esc(label.slice(0, 1).toUpperCase())}</div><div><button type="button" class="record-link record-title" data-view-customer="${esc(c.id)}">${esc(label)}</button>${secondary ? `<div class="record-sub">${esc(secondary)}</div>` : ''}${count ? `<div class="customer-order-count">${count} 个订单</div>` : ''}</div></div></td><td><span class="customer-country">${esc(c.country || '-')}</span></td><td>${esc(c.contactPerson || '-')}</td><td><div>${esc(c.email || '-')}</div><div class="record-sub">${esc(c.telephone || '-')}</div></td><td>${esc(c.consigneeName || '—')}</td><td><div class="customer-actions">${archivedView ? '' : `<button class="btn small" data-edit-customer="${esc(c.id)}">编辑</button>`}${lifecycleActions('customers', c.id)}</div></td></tr>`;
             })
             .join('')}</tbody></table></div>`
         : empty
     }</section>`;
   }
+  // One customer form field: bilingual label, full-width control and optional hint below it.
+  function customerField(
+    label,
+    name,
+    value = '',
+    { type = 'text', required = false, hint = '', wide = false, control = '' } = {},
+  ) {
+    const id = `customer-field-${name}`,
+      input =
+        control ||
+        (type === 'textarea'
+          ? `<textarea id="${id}" name="${name}" rows="3">${esc(value)}</textarea>`
+          : `<input id="${id}" type="${type}" name="${name}" value="${esc(value)}" ${required ? 'required' : ''}>`);
+    return `<div class="field customer-field${wide ? ' customer-field-wide' : ''}"><label for="${id}" ${required ? 'class="required"' : ''}>${I18N.label(label)}</label>${input}${hint ? `<small class="field-hint">${hint}</small>` : ''}</div>`;
+  }
+  function customerSection(zh, en, note, body) {
+    return `<section class="customer-form-section"><header class="customer-section-head"><h3>${bi(zh, en)}</h3>${note ? `<p>${note}</p>` : ''}</header><div class="customer-form-grid">${body}</div></section>`;
+  }
   function customerForm(c = {}) {
     const owner = DB.getMetadata('customers', c.id).ownerUserId || state.user?.id,
       ownerField =
         isAdmin() && !c.id
-          ? `<div class="field"><label>Owner</label><select name="ownerUserId"><option value="${esc(state.user.id)}">${esc(state.user.displayName || state.user.username)} · ADMIN</option>${state.users
-              .filter((user) => user.status === 'ACTIVE')
-              .map(
-                (user) =>
-                  `<option value="${esc(user.id)}" ${owner === user.id ? 'selected' : ''}>${esc(user.displayName)} · ${esc(user.username)}</option>`,
-              )
-              .join(
-                '',
-              )}</select><small class="field-hint">管理员可在创建时指定Employee Owner。</small></div>`
-          : '';
-    return `<form id="customer-form" data-id="${esc(c.id || '')}"><div class="form-grid">
-    <section class="customer-form-section"><h3>Customer Identity</h3><p class="customer-section-note">Buyer主体与单据名称</p><div class="form-grid customer-form-grid">${selectField('Buyer Type', 'buyerType', ['Company', 'Individual'], c.buyerType || 'Company', 'required')}${ownerField}${field('Company Name', 'companyName', c.companyName || '')}<small class="customer-helper company-helper">公司注册主体名称</small>${field('Buyer Name', 'buyerName', c.buyerName || '', 'text', 'required')}<small class="customer-helper buyer-helper">单据中显示的Buyer名称</small>${field('Registration Number', 'registrationNumber', c.registrationNumber || '')}${field('Tax Number', 'taxNumber', c.taxNumber || '')}</div></section>
-    <section class="customer-form-section"><h3>Primary Contact</h3><div class="form-grid customer-form-grid">${field('Contact Person', 'contactPerson', c.contactPerson || '')}${field('Email', 'email', c.email || '', 'email')}${field('Telephone', 'telephone', c.telephone || '')}${field('Website', 'website', c.website || '')}</div></section>
-    <section class="customer-form-section"><h3>Buyer Address</h3><div class="form-grid customer-form-grid"><div class="customer-field-wide">${field('Address', 'address', c.address || '')}<small class="customer-helper">Buyer主要地址</small></div>${field('Country', 'country', c.country || '', 'text', 'required')}</div></section>
-    <section class="customer-form-section"><h3>Consignee / Shipping Contact</h3><p class="customer-section-note">实际收货方，如与Buyer不同可填写</p><div class="form-grid customer-form-grid">${field('Consignee Name', 'consigneeName', c.consigneeName || '')}${field('Consignee Country', 'consigneeCountry', c.consigneeCountry || '')}${field('Consignee Telephone', 'consigneeTelephone', c.consigneeTelephone || '')}<div class="customer-field-wide">${field('Consignee Address', 'consigneeAddress', c.consigneeAddress || '')}</div></div></section>
-    <section class="customer-form-section"><h3>Internal Notes</h3><div class="form-grid customer-form-grid"><div class="customer-field-wide">${textArea('Notes', 'notes', c.notes || '')}</div></div></section>
-    </div><div class="modal-actions"><button type="button" class="btn" data-close-modal>取消</button><button class="btn primary" type="submit">保存客户</button></div></form>`;
+          ? customerField('Owner', 'ownerUserId', '', {
+              control: `<select id="customer-field-ownerUserId" name="ownerUserId"><option value="${esc(state.user.id)}">${esc(state.user.displayName || state.user.username)} · 管理员</option>${state.users
+                .filter((user) => user.status === 'ACTIVE')
+                .map(
+                  (user) =>
+                    `<option value="${esc(user.id)}" ${owner === user.id ? 'selected' : ''}>${esc(user.displayName)} · ${esc(user.username)}</option>`,
+                )
+                .join('')}</select>`,
+              hint: '管理员可在创建时指定负责该客户的员工。',
+            })
+          : '',
+      buyerType = c.buyerType || 'Company';
+    return `<form id="customer-form" class="customer-form" data-id="${esc(c.id || '')}"><div class="customer-form-sections">
+    ${customerSection('客户主体', 'Customer Identity', '买方主体与单据中显示的名称', `${customerField('Buyer Type', 'buyerType', buyerType, { required: true, control: `<select id="customer-field-buyerType" name="buyerType" required>${options(['Company', 'Individual'], buyerType)}</select>` })}${ownerField}${customerField('Company Name', 'companyName', c.companyName, { hint: '公司注册主体名称；公司客户必填' })}${customerField('Buyer Name', 'buyerName', c.buyerName, { required: true, hint: '单据中显示的买方名称' })}${customerField('Registration Number', 'registrationNumber', c.registrationNumber)}${customerField('Tax Number', 'taxNumber', c.taxNumber)}`)}
+    ${customerSection('主要联系人', 'Primary Contact', '', `${customerField('Contact Person', 'contactPerson', c.contactPerson)}${customerField('Email', 'email', c.email, { type: 'email' })}${customerField('Telephone', 'telephone', c.telephone)}${customerField('Website', 'website', c.website)}`)}
+    ${customerSection('买方地址', 'Buyer Address', '', `${customerField('Address', 'address', c.address, { wide: true, hint: '买方主要地址，用于 PI、CI 和 Packing List' })}${customerField('Country', 'country', c.country, { required: true })}`)}
+    ${customerSection('收货人', 'Consignee', '实际收货方；与买方相同时可留空', `${customerField('Consignee Name', 'consigneeName', c.consigneeName)}${customerField('Consignee Country', 'consigneeCountry', c.consigneeCountry)}${customerField('Consignee Telephone', 'consigneeTelephone', c.consigneeTelephone)}${customerField('Consignee Address', 'consigneeAddress', c.consigneeAddress, { wide: true })}`)}
+    ${customerSection('内部备注', 'Internal Notes', '仅内部可见，不会出现在单据中', customerField('Notes', 'notes', c.notes, { type: 'textarea', wide: true }))}
+    </div><div class="modal-actions customer-form-actions"><button type="button" class="btn" data-close-modal>取消</button><button class="btn primary" type="submit">保存客户</button></div></form>`;
+  }
+  function customerDetail(c) {
+    const archived = (DB.getMetadata('customers', c.id).lifecycleState || 'ACTIVE') !== 'ACTIVE',
+      orders = state.orders.filter((o) => o.customerId === c.id).length,
+      row = (label, value, wide = false) =>
+        `<div class="customer-detail-item${wide ? ' wide' : ''}"><dt>${I18N.label(label)}</dt><dd data-no-i18n>${value ? esc(value) : '<span class="muted">—</span>'}</dd></div>`,
+      section = (zh, en, items) =>
+        `<section class="customer-detail-section"><h4>${bi(zh, en)}</h4><dl class="customer-detail-grid">${items}</dl></section>`,
+      type = c.buyerType === 'Individual' ? '个人' : '公司';
+    return `<div class="customer-detail"><div class="customer-detail-head"><div class="avatar">${esc(customerLabel(c).slice(0, 1).toUpperCase())}</div><div class="customer-detail-title"><h3 data-no-i18n>${esc(customerLabel(c))}</h3><p>${type}${c.country ? ` · <span data-no-i18n>${esc(c.country)}</span>` : ''}${archived ? ' · <span class="detail-archived">已归档</span>' : ''}</p></div><div class="customer-detail-orders"><strong>${orders}</strong><span>${bi('个进行中订单', 'Active Orders')}</span></div></div>
+    ${section('客户主体', 'Customer Identity', `${row('Company Name', c.companyName)}${row('Buyer Name', c.buyerName)}${row('Registration Number', c.registrationNumber)}${row('Tax Number', c.taxNumber)}`)}
+    ${section('主要联系人', 'Primary Contact', `${row('Contact Person', c.contactPerson)}${row('Email', c.email)}${row('Telephone', c.telephone)}${row('Website', c.website)}`)}
+    ${section('买方地址', 'Buyer Address', `${row('Address', c.address, true)}${row('Country', c.country)}`)}
+    ${section('收货人', 'Consignee', `${row('Consignee Name', c.consigneeName)}${row('Consignee Country', c.consigneeCountry)}${row('Consignee Telephone', c.consigneeTelephone)}${row('Consignee Address', c.consigneeAddress, true)}`)}
+    ${c.notes ? section('内部备注', 'Internal Notes', row('Notes', c.notes, true)) : ''}
+    <div class="modal-actions customer-detail-actions"><button type="button" class="btn danger" data-delete-record data-store="customers" data-id="${esc(c.id)}">删除</button><span class="actions-spacer"></span><button type="button" class="btn" data-close-modal>关闭</button>${archived ? `<button type="button" class="btn primary" data-restore-record data-store="customers" data-id="${esc(c.id)}">恢复</button>` : `<button type="button" class="btn" data-archive-record data-store="customers" data-id="${esc(c.id)}">归档</button><button type="button" class="btn primary" data-edit-customer="${esc(c.id)}">编辑</button>`}</div></div>`;
   }
   async function saveCustomer(form) {
     const d = Object.fromEntries(new FormData(form)),
       ownerUserId = d.ownerUserId;
     delete d.ownerUserId;
     if (!d.buyerName || !d.country) {
-      toast('Buyer Name 和 Country 为必填项', 'error');
+      toast('请填写买方名称和国家/地区', 'error');
       return;
     }
     if (!C.validateEmail(d.email)) {
@@ -1539,7 +1591,7 @@
       return;
     }
     if (d.buyerType === 'Company' && !d.companyName) {
-      toast('企业客户请填写 Company Name', 'error');
+      toast('公司客户请填写公司名称', 'error');
       return;
     }
     const c = {
@@ -1559,14 +1611,16 @@
 
   function renderProducts() {
     const f = state.filters,
+      archivedView = isArchivedView('products'),
+      source = archivedView ? state.archived.products : state.products,
       q = (f.productQ || '').toLowerCase(),
-      units = [
-        ...new Set(state.products.map((p) => String(p.unit || '').trim()).filter(Boolean)),
-      ].sort((a, b) => a.localeCompare(b)),
-      origins = [
-        ...new Set(state.products.map((p) => String(p.origin || '').trim()).filter(Boolean)),
-      ].sort((a, b) => a.localeCompare(b));
-    let rows = state.products.filter((p) => {
+      units = [...new Set(source.map((p) => String(p.unit || '').trim()).filter(Boolean))].sort(
+        (a, b) => a.localeCompare(b),
+      ),
+      origins = [...new Set(source.map((p) => String(p.origin || '').trim()).filter(Boolean))].sort(
+        (a, b) => a.localeCompare(b),
+      );
+    let rows = source.filter((p) => {
       const text =
         `${p.englishName} ${p.chineseName} ${p.description} ${p.sku} ${p.model} ${p.hsCode} ${p.material} ${p.origin}`.toLowerCase();
       return (
@@ -1594,9 +1648,11 @@
     });
     const optionList = (values, empty, selected) =>
       `<option value="">${empty}</option>${values.map((value) => `<option value="${esc(value)}" ${selected === value ? 'selected' : ''}>${esc(value)}</option>`).join('')}`;
-    const empty = state.products.length
-      ? `<div class="empty product-empty-state"><strong>暂无匹配产品</strong><span>请调整搜索或筛选条件。</span></div>`
-      : `<div class="empty product-empty-state"><strong>暂无产品</strong><span>创建产品后，可在订单中快速选择并自动带入产品基础资料和默认包装信息。</span><button class="btn primary" data-new-product>＋ 新增产品</button></div>`;
+    const empty = archivedView
+      ? `<div class="empty product-empty-state"><strong>没有已归档的产品</strong><span>归档的产品会显示在这里，可以恢复${isAdmin() ? '或永久删除' : ''}。</span></div>`
+      : source.length
+        ? `<div class="empty product-empty-state"><strong>暂无匹配产品</strong><span>请调整搜索或筛选条件。</span></div>`
+        : `<div class="empty product-empty-state"><strong>暂无产品</strong><span>创建产品后，可在订单中快速选择并自动带入产品基础资料和默认包装信息。</span><button class="btn primary" data-new-product>＋ 新增产品</button></div>`;
     const packing = (p) => {
       const weights = [
           p.netWeight ? `N.W. ${C.asNumber(p.netWeight)} kg` : '',
@@ -1607,7 +1663,7 @@
           : '';
       return `<div class="product-packing-summary"><span>${esc(weights.join(' · ') || 'Weight —')}</span><span>${p.cartonQty ? `${esc(C.asNumber(p.cartonQty))} pcs/carton` : 'Cartons —'}</span><span>${esc(dims || 'Dimensions —')}</span></div>`;
     };
-    return `<div class="toolbar product-toolbar-refined"><div class="search product-search"><label class="sr-only" for="product-search">搜索产品</label><input id="product-search" placeholder="搜索名称、Description、SKU、Model、HS Code、Material 或 Origin" value="${esc(f.productQ || '')}"></div><label class="product-filter"><span>Unit</span><select id="product-unit-filter">${optionList(units, 'All Units', f.productUnit)}</select></label><label class="product-filter"><span>Origin</span><select id="product-origin-filter">${optionList(origins, 'All Origins', f.productOrigin)}</select></label><label class="product-filter product-sort"><span>Sort</span><select id="product-sort"><option value="name" ${sort === 'name' ? 'selected' : ''}>Product Name</option><option value="sku" ${sort === 'sku' ? 'selected' : ''}>SKU</option><option value="hs" ${sort === 'hs' ? 'selected' : ''}>HS Code</option><option value="updated" ${sort === 'updated' ? 'selected' : ''}>Recently Updated</option></select></label><div class="product-toolbar-actions"><button class="btn" data-import-csv>导入 CSV</button><button class="btn" data-export-csv>导出 CSV</button><button class="btn primary" data-new-product>＋ 新增产品</button></div></div><section class="panel product-list-panel">${
+    return `<div class="toolbar product-toolbar-refined"><div class="search product-search"><label class="sr-only" for="product-search">搜索产品</label><input id="product-search" placeholder="搜索名称、描述、SKU、型号、HS 编码、材质或原产地" value="${esc(f.productQ || '')}"></div><label class="product-filter"><span>${I18N.label('Unit')}</span><select id="product-unit-filter">${optionList(units, 'All Units', f.productUnit)}</select></label><label class="product-filter"><span>${I18N.label('Origin')}</span><select id="product-origin-filter">${optionList(origins, 'All Origins', f.productOrigin)}</select></label><label class="product-filter product-sort"><span>${bi('排序', 'Sort')}</span><select id="product-sort"><option value="name" ${sort === 'name' ? 'selected' : ''}>Product Name</option><option value="sku" ${sort === 'sku' ? 'selected' : ''}>SKU</option><option value="hs" ${sort === 'hs' ? 'selected' : ''}>HS Code</option><option value="updated" ${sort === 'updated' ? 'selected' : ''}>Recently Updated</option></select></label>${recordViewSwitch('products')}<div class="product-toolbar-actions"><button class="btn" data-import-csv>导入 CSV</button><button class="btn" data-export-csv>导出 CSV</button><button class="btn primary" data-new-product>＋ 新增产品</button></div></div><section class="panel product-list-panel">${
       rows.length
         ? `<div class="table-wrap"><table class="product-table"><thead><tr><th>Product</th><th>Model / SKU</th><th>Unit</th><th>HS Code</th><th>Origin</th><th>Default Packing</th><th>Actions</th></tr></thead><tbody>${rows
             .map((p) => {
@@ -1615,7 +1671,7 @@
                 chinese = p.chineseName && p.chineseName !== label ? p.chineseName : '',
                 model = p.model || '—',
                 sku = p.sku || '—';
-              return `<tr><td><div class="record-cell">${p.image ? `<img class="avatar" src="${esc(p.image)}" alt="">` : `<div class="avatar">◇</div>`}<div><div class="record-title">${esc(label)}</div>${chinese ? `<div class="record-sub">${esc(chinese)}</div>` : ''}${p.material ? `<div class="record-sub product-material">${esc(p.material)}</div>` : ''}<details class="product-inline-details"><summary>展开详情</summary><div><span>Description</span>${esc(p.description || '—')}</div><div><span>Default Price</span>${C.money(p.defaultPrice).toFixed(2)} <small>Currency is determined by the order.</small></div>${p.notes ? `<div><span>Notes</span>${esc(p.notes)}</div>` : ''}${p.image ? `<img src="${esc(p.image)}" alt="产品图片">` : ''}</details></div></div></td><td><strong>${esc(model)}</strong><div class="record-sub">SKU ${esc(sku)}</div></td><td>${esc(p.unit || '—')}</td><td>${esc(p.hsCode || '—')}</td><td><span class="product-origin">${esc(p.origin || '—')}</span></td><td>${packing(p)}</td><td><div class="product-actions"><button class="btn small" data-edit-product="${esc(p.id)}">编辑</button><button class="btn small danger" data-delete-product="${esc(p.id)}">删除</button></div></td></tr>`;
+              return `<tr><td><div class="record-cell">${p.image ? `<img class="avatar" src="${esc(p.image)}" alt="">` : `<div class="avatar">◇</div>`}<div><div class="record-title">${esc(label)}</div>${chinese ? `<div class="record-sub">${esc(chinese)}</div>` : ''}${p.material ? `<div class="record-sub product-material">${esc(p.material)}</div>` : ''}<details class="product-inline-details"><summary>展开详情</summary><div><span>Description</span>${esc(p.description || '—')}</div><div><span>Default Price</span>${C.money(p.defaultPrice).toFixed(2)} <small>Currency is determined by the order.</small></div>${p.notes ? `<div><span>Notes</span>${esc(p.notes)}</div>` : ''}${p.image ? `<img src="${esc(p.image)}" alt="产品图片">` : ''}</details></div></div></td><td><strong>${esc(model)}</strong><div class="record-sub">SKU ${esc(sku)}</div></td><td>${esc(p.unit || '—')}</td><td>${esc(p.hsCode || '—')}</td><td><span class="product-origin">${esc(p.origin || '—')}</span></td><td>${packing(p)}</td><td><div class="product-actions">${archivedView ? '' : `<button class="btn small" data-edit-product="${esc(p.id)}">编辑</button>`}${lifecycleActions('products', p.id, { canDelete: isAdmin() })}</div></td></tr>`;
             })
             .join('')}</tbody></table></div>`
         : empty
@@ -1637,7 +1693,7 @@
   async function saveProduct(form) {
     const d = Object.fromEntries(new FormData(form));
     if (!d.englishName || !d.sku) {
-      toast('英文产品名和 SKU 为必填项', 'error');
+      toast('请填写产品英文名称和 SKU', 'error');
       return;
     }
     if (C.asNumber(d.grossWeight) < C.asNumber(d.netWeight)) {
@@ -1793,7 +1849,7 @@
     <section class="company-settings-section"><div class="company-section-head"><div><span class="company-kicker">Document-facing information</span><h2 class="section-title">Authorized Signatory</h2><p class="company-section-note">用于正式单据签字人信息。</p></div></div><div class="form-grid company-form-grid">${field('Authorized Signatory Name', 'authorizedSignatoryName', c.authorizedSignatoryName || '')}${field('Authorized Signatory Title', 'authorizedSignatoryTitle', c.authorizedSignatoryTitle || 'Legal Representative')}</div></section>
     <section class="company-settings-section"><div class="company-section-head"><div><span class="company-kicker">Document Assets</span><h2 class="section-title">Brand Assets</h2><p class="company-section-note">Logo 只作为品牌素材使用，不会自动生成。</p></div></div><div class="company-asset-grid"><div class="company-asset-card">${companyImageField(c, 'logo', '公司Logo / Company Logo', imageAccept)}</div></div></section>
     <section class="company-settings-section"><div class="company-section-head"><div><span class="company-kicker">Signing Assets</span><h2 class="section-title">Signing Assets</h2><p class="company-section-note">签名和公司公章仅用于正式签章；删除操作继续需要双重确认。</p></div></div><div class="company-asset-grid signing-assets-grid"><div class="company-asset-card">${companyImageField(c, 'signature', '手写签名图片 / Signature Image', imageAccept, true)}</div><div class="company-asset-card">${companyImageField(c, 'stamp', '公司公章图片 / Company Stamp Image', imageAccept, true)}</div></div></section>
-    <section class="company-settings-section bank-accounts-section"><div class="company-section-head bank-section-head"><div><span class="company-kicker">Internal Configuration</span><h2 class="section-title">Bank Accounts <small class="account-count">${(c.accounts || []).length} accounts</small></h2><p class="company-section-note">收款账户资料仅在选择对应币种账户时用于 PI；Payment Reference 不属于订单收款记录。</p></div><button type="button" class="btn small primary" data-add-account>＋ 添加账户</button></div><div id="account-list">${(c.accounts || []).map((a, i) => accountForm(a, i)).join('')}</div></section>
+    <section class="company-settings-section bank-accounts-section"><div class="company-section-head bank-section-head"><div><span class="company-kicker">Internal Configuration</span><h2 class="section-title">Bank Accounts <small class="account-count">${(c.accounts || []).length} 个账户</small></h2><p class="company-section-note">收款账户资料仅在选择对应币种账户时用于 PI；Payment Reference 不属于订单收款记录。</p></div><button type="button" class="btn small primary" data-add-account>＋ 添加账户</button></div><div id="account-list">${(c.accounts || []).map((a, i) => accountForm(a, i)).join('')}</div></section>
     <div class="footer-actions company-save-bar"><div><strong>保存公司设置</strong><small>保存公司资料、签字人和收款账户设置。</small></div><button class="btn primary" type="submit">保存公司设置</button></div></form>`;
   }
   function accountForm(raw = {}, i) {
@@ -1816,7 +1872,23 @@
             })[key],
         )
         .filter(Boolean);
-    return `<details class="account-card" data-account="${i}" data-id="${esc(a.id || '')}"><summary class="account-card-summary"><span class="account-summary-main"><strong>${esc(a.label || `账户 ${i + 1}`)}</strong><span>${esc(currency)} · ${esc(a.bankName || 'Bank not set')}</span></span><span class="account-summary-meta"><span>${esc(a.beneficiaryName || C.companyEnglishName(state.company) || 'Beneficiary not set')}</span><span>${summaryFields.filter((key) => ({ 'Account': a.accountNumber, 'IBAN': a.iban, 'ACH': a.achRoutingNumber, 'Wire': a.wireRoutingNumber, 'Sort Code': a.sortCode, 'SWIFT': a.swift, 'Clearing': a.localClearingCode })[key]).join(' · ') || 'Bank details incomplete'}</span></span><span class="account-summary-chevron">⌄</span></summary><div class="account-card-body"><div class="account-card-actions"><span class="account-edit-note">展开编辑账户详情</span><button type="button" class="btn small danger" data-delete-account="${i}">删除账户</button></div>${testIssues.length ? `<div class="warning account-warning"><strong>测试资料：</strong>${esc(testIssues[0])}，禁止用于导出 Final PI。</div>` : ''}${legacyPending ? `<div class="warning legacy-routing-note">检测到旧版 Routing Number，已安全保留。请确认后分别填写 ACH 与 Wire；两项填写完成后此提醒将自动消失。</div>` : ''}<input type="hidden" name="legacyRoutingNumber" value="${esc(a.legacyRoutingNumber || '')}"><div class="account-form-group"><span class="account-group-label">Account Identity</span><div class="form-grid account-form-grid">${bankField('Account Name', 'label', a.label || '', true, '该名称可能显示在PI中，建议使用英文。')}${selectField('Currency', 'currency', C.CURRENCIES, currency)}${bankField('Beneficiary Name', 'beneficiaryName', a.beneficiaryName ?? C.companyEnglishName(state.company), true, '必须按照万里汇账户详情原样填写。')}</div></div><div class="account-form-group"><span class="account-group-label">Bank</span><div class="form-grid account-form-grid">${bankField('Bank Name', 'bankName', a.bankName || '')}${bankField('Bank Address', 'bankAddress', a.bankAddress || '', true, '允许输入完整多行地址，PI和PDF会自动换行。', 'account-field-wide')}</div></div><div class="account-form-group"><span class="account-group-label">Routing & Account Details</span><div class="form-grid account-form-grid">${bankField('Account Number', 'accountNumber', a.accountNumber || '', visible.has('accountNumber'))}${bankField('ACH Routing Number', 'achRoutingNumber', a.achRoutingNumber || '', visible.has('achRoutingNumber'), '美国ACH本地转账')}${bankField('Wire Routing Number', 'wireRoutingNumber', a.wireRoutingNumber || '', visible.has('wireRoutingNumber'), '美国Fedwire本地电汇')}${bankField('Sort Code', 'sortCode', a.sortCode || '', visible.has('sortCode'), '英国本地转账代码')}${bankField('IBAN', 'iban', a.iban || '', visible.has('iban'), '欧洲及相关地区国际银行账号')}${bankField('SWIFT/BIC', 'swift', a.swift || '', visible.has('swift'))}${bankField('Local Clearing Code', 'localClearingCode', a.localClearingCode || '', visible.has('localClearingCode'))}</div></div><div class="account-form-group"><span class="account-group-label">Payment Reference</span><div class="form-grid account-form-grid">${bankField('Payment Reference', 'paymentReference', a.paymentReference || '', true, '', 'account-field-wide')}</div></div></div></details>`;
+    return `<details class="account-card" data-account="${i}" data-id="${esc(a.id || '')}"><summary class="account-card-summary"><span class="account-summary-main"><strong>${esc(a.label || `账户 ${i + 1}`)}</strong><span>${esc(currency)} · ${esc(a.bankName || '未填写银行')}</span></span><span class="account-summary-meta"><span>${esc(a.beneficiaryName || C.companyEnglishName(state.company) || '未填写收款人')}</span><span>${
+      summaryFields
+        .filter(
+          (key) =>
+            ({
+              'Account': a.accountNumber,
+              'IBAN': a.iban,
+              'ACH': a.achRoutingNumber,
+              'Wire': a.wireRoutingNumber,
+              'Sort Code': a.sortCode,
+              'SWIFT': a.swift,
+              'Clearing': a.localClearingCode,
+            })[key],
+        )
+        .map((key) => ACCOUNT_FIELD_LABELS[key] || key)
+        .join(' · ') || '银行资料不完整'
+    }</span></span><span class="account-summary-chevron">⌄</span></summary><div class="account-card-body"><div class="account-card-actions"><span class="account-edit-note">展开编辑账户详情</span><button type="button" class="btn small danger" data-delete-account="${i}">删除账户</button></div>${testIssues.length ? `<div class="warning account-warning"><strong>测试资料：</strong>${esc(testIssues[0])}，禁止用于导出 Final PI。</div>` : ''}${legacyPending ? `<div class="warning legacy-routing-note">检测到旧版 Routing Number，已安全保留。请确认后分别填写 ACH 与 Wire；两项填写完成后此提醒将自动消失。</div>` : ''}<input type="hidden" name="legacyRoutingNumber" value="${esc(a.legacyRoutingNumber || '')}"><div class="account-form-group"><span class="account-group-label">Account Identity</span><div class="form-grid account-form-grid">${bankField('Account Name', 'label', a.label || '', true, '该名称可能显示在PI中，建议使用英文。')}${selectField('Currency', 'currency', C.CURRENCIES, currency)}${bankField('Beneficiary Name', 'beneficiaryName', a.beneficiaryName ?? C.companyEnglishName(state.company), true, '必须按照万里汇账户详情原样填写。')}</div></div><div class="account-form-group"><span class="account-group-label">Bank</span><div class="form-grid account-form-grid">${bankField('Bank Name', 'bankName', a.bankName || '')}${bankField('Bank Address', 'bankAddress', a.bankAddress || '', true, '允许输入完整多行地址，PI和PDF会自动换行。', 'account-field-wide')}</div></div><div class="account-form-group"><span class="account-group-label">Routing & Account Details</span><div class="form-grid account-form-grid">${bankField('Account Number', 'accountNumber', a.accountNumber || '', visible.has('accountNumber'))}${bankField('ACH Routing Number', 'achRoutingNumber', a.achRoutingNumber || '', visible.has('achRoutingNumber'), '美国ACH本地转账')}${bankField('Wire Routing Number', 'wireRoutingNumber', a.wireRoutingNumber || '', visible.has('wireRoutingNumber'), '美国Fedwire本地电汇')}${bankField('Sort Code', 'sortCode', a.sortCode || '', visible.has('sortCode'), '英国本地转账代码')}${bankField('IBAN', 'iban', a.iban || '', visible.has('iban'), '欧洲及相关地区国际银行账号')}${bankField('SWIFT/BIC', 'swift', a.swift || '', visible.has('swift'))}${bankField('Local Clearing Code', 'localClearingCode', a.localClearingCode || '', visible.has('localClearingCode'))}</div></div><div class="account-form-group"><span class="account-group-label">Payment Reference</span><div class="form-grid account-form-grid">${bankField('Payment Reference', 'paymentReference', a.paymentReference || '', true, '', 'account-field-wide')}</div></div></div></details>`;
   }
   function updateAccountCurrency(card) {
     const visible = new Set(C.bankFieldsForCurrency($('[name="currency"]', card)?.value || ''));
@@ -1946,7 +2018,7 @@
     ].join('');
     const revisionNote =
       type === 'PI' && settings.version === 'Final'
-        ? `<span class="revision-pill">${esc(displayOrder.piDisplayNumber || displayOrder.piNumber)} · Revision ${esc(displayOrder.piRevision ?? order.activePiRevision ?? 0)}</span>`
+        ? `<span class="revision-pill">${esc(displayOrder.piDisplayNumber || displayOrder.piNumber)} · 修订版 ${esc(displayOrder.piRevision ?? order.activePiRevision ?? 0)}</span>`
         : '';
     const modeControl = `<label class="doc-option">Final签署方式 <select id="preview-signing-mode" ${state.previewPiRevision !== null ? 'disabled' : ''}><option value="Electronic" ${settings.signingMode === 'Electronic' ? 'selected' : ''}>Electronic Signature 电子签章</option><option value="Print" ${settings.signingMode === 'Print' ? 'selected' : ''}>Print and Sign 打印签章</option></select></label>`;
     const signingControls =
@@ -2175,7 +2247,7 @@
       state.previewType === 'CI' &&
       (!C.actualTransportMethod(stage) || !stage.actualTransportConfirmed)
     ) {
-      toast('请先确认 Actual Transport Method', 'error');
+      toast('请先确认实际运输方式', 'error');
       render();
       return;
     }
@@ -2288,6 +2360,13 @@
       attachments,
     };
   }
+  // Which account details are filled in, shown in the collapsed account card.
+  const ACCOUNT_FIELD_LABELS = {
+    Account: '账号',
+    Wire: '电汇路由号',
+    'Sort Code': '分类代码',
+    Clearing: '清算代码',
+  };
   function metricTiles(metrics, includeExtended = true) {
     const base = [
       ['Company', metrics.company],
@@ -2307,7 +2386,7 @@
     return base
       .map(
         ([label, value]) =>
-          `<div class="backup-metric"><span>${label}</span><strong>${value}</strong></div>`,
+          `<div class="backup-metric"><span>${I18N.label(label)}</span><strong>${value}</strong></div>`,
       )
       .join('');
   }
@@ -2328,7 +2407,7 @@
       pointText = point?.createdAt
         ? new Date(point.createdAt).toLocaleString('zh-CN')
         : '暂无最新恢复点';
-    return `<div class="backup-safety-status ${overdue ? 'is-overdue' : 'is-current'}"><div><span class="backup-kicker">Data Safety</span><strong>${overdue ? 'Backup recommended' : 'Backup status up to date'}</strong><small>当前数据保存在服务器 SQLite；导出不会修改服务器数据。</small></div><div class="backup-status-meta"><span><b>Last Full Backup</b>${esc(lastText)}</span><span><b>Reminder</b>${overdue ? '超过 7 天' : '7 天内'}</span><span><b>Restore Point</b>${point ? 'Available / 可用' : 'None / 暂无'}</span></div></div><section class="panel backup-local-panel"><div class="panel-head"><div><span class="backup-kicker">Read-only Summary</span><h2>Current Server Data</h2></div><span class="backup-local-note">仅统计服务器当前业务数据</span></div><div class="backup-metrics">${metricTiles(current)}</div></section><div class="backup-workspace"><section class="panel backup-export-panel"><div class="panel-head"><div><span class="backup-kicker">Safe Operation</span><h2>Export Current Data</h2></div><span class="backup-operation-badge safe">Recommended</span></div><div class="panel-body backup-operation-body"><p class="muted">Full Backup JSON 可用于完整恢复，包含公司、银行账户、客户、产品、订单、PI / CI、Packing List、收款记录和附件。</p><button class="btn primary backup-primary-action" data-export-backup>导出完整备份</button><p class="backup-short-note">导出不会修改服务器数据。完整备份可能包含银行账户、Signature、Company Stamp、公司资料和客户资料，请妥善保存。</p></div></section><section class="panel backup-import-panel"><div class="panel-head"><div><span class="backup-kicker">High-risk Operation</span><h2>Import Full Backup</h2></div><span class="backup-operation-badge risk">Full Replacement</span></div><div class="panel-body backup-operation-body"><p class="muted">导入是完整替换，不是合并。当前 Company、Customers、Products、Orders、Packing Lists 及相关单据数据将被备份文件替换。</p><button class="btn backup-risk-action" data-import-backup>选择备份文件预览</button><p class="backup-short-note">确认导入前，服务器会先保存当前数据为唯一的最新恢复点。需要长期保留当前状态时，请先导出完整备份。</p></div></section></div><section class="panel backup-restore-panel"><div class="panel-head"><div><span class="backup-kicker">Single Recovery Slot</span><h2>Restore Point</h2></div><span class="backup-operation-badge ${point ? 'available' : 'empty'}">${point ? 'Latest / 最新' : 'None / 暂无'}</span></div><div class="panel-body"><div class="restore-point-layout"><div><strong>Latest Restore Point</strong><p class="muted">${esc(pointText)}</p><p class="backup-short-note">当前系统只有一个 restorePoints/latest，恢复会替换服务器当前业务数据，不是合并操作。</p></div>${point ? `<div class="restore-point-summary">${metricTiles(pointMetrics, false)}</div>` : '<div class="restore-empty">导入或清空数据前创建的恢复点会显示在这里。</div>'}</div><button class="btn backup-risk-action" data-restore-latest ${point ? '' : 'disabled'}>恢复上一个恢复点</button></div></section><section class="panel backup-danger-panel"><div class="panel-head"><div><span class="backup-kicker">Irreversible-looking Operation</span><h2>Dangerous Actions</h2></div></div><div class="panel-body"><p class="muted">清空将删除服务器当前业务数据。执行前服务器会创建最新恢复点，并继续要求两次确认；如需长期保留，请先导出完整备份。</p><button class="btn danger" data-clear-data>清空全部业务数据</button></div></section><section class="backup-format-note"><strong>Export formats</strong><span>Full Backup JSON：可用于完整恢复 · Product CSV：仅产品数据 · Order ZIP：单订单归档，不是完整数据库备份。</span></section>`;
+    return `<div class="backup-safety-status ${overdue ? 'is-overdue' : 'is-current'}"><div><span class="backup-kicker">Data Safety</span><strong>${overdue ? '建议立即导出完整备份' : '备份状态正常'}</strong><small>当前数据保存在服务器 SQLite；导出不会修改服务器数据。</small></div><div class="backup-status-meta"><span><b>Last Full Backup</b>${esc(lastText)}</span><span><b>Reminder</b>${overdue ? '超过 7 天' : '7 天内'}</span><span><b>Restore Point</b>${point ? '可用' : '暂无'}</span></div></div><section class="panel backup-local-panel"><div class="panel-head"><div><span class="backup-kicker">Read-only Summary</span><h2>Current Server Data</h2></div><span class="backup-local-note">仅统计服务器当前业务数据</span></div><div class="backup-metrics">${metricTiles(current)}</div></section><div class="backup-workspace"><section class="panel backup-export-panel"><div class="panel-head"><div><span class="backup-kicker">Safe Operation</span><h2>Export Current Data</h2></div><span class="backup-operation-badge safe">Recommended</span></div><div class="panel-body backup-operation-body"><p class="muted">完整备份（JSON）可用于完整恢复，包含公司、收款账户、客户、产品、订单、PI / CI、Packing List、收款记录和附件。</p><button class="btn primary backup-primary-action" data-export-backup>导出完整备份</button><p class="backup-short-note">导出不会修改服务器数据。完整备份可能包含银行账户、签名、公司印章、公司资料和客户资料，请妥善保存。</p></div></section><section class="panel backup-import-panel"><div class="panel-head"><div><span class="backup-kicker">High-risk Operation</span><h2>Import Full Backup</h2></div><span class="backup-operation-badge risk">Full Replacement</span></div><div class="panel-body backup-operation-body"><p class="muted">导入是完整替换，不是合并。当前公司、客户、产品、订单、装箱单及相关单据数据将被备份文件替换。</p><button class="btn backup-risk-action" data-import-backup>选择备份文件预览</button><p class="backup-short-note">确认导入前，服务器会先保存当前数据为唯一的最新恢复点。需要长期保留当前状态时，请先导出完整备份。</p></div></section></div><section class="panel backup-restore-panel"><div class="panel-head"><div><span class="backup-kicker">Single Recovery Slot</span><h2>Restore Point</h2></div><span class="backup-operation-badge ${point ? 'available' : 'empty'}">${point ? '最新' : '暂无'}</span></div><div class="panel-body"><div class="restore-point-layout"><div><strong>Latest Restore Point</strong><p class="muted">${esc(pointText)}</p><p class="backup-short-note">系统只保留一个最新恢复点，恢复会替换服务器当前业务数据，不是合并操作。</p></div>${point ? `<div class="restore-point-summary">${metricTiles(pointMetrics, false)}</div>` : '<div class="restore-empty">导入或清空数据前创建的恢复点会显示在这里。</div>'}</div><button class="btn backup-risk-action" data-restore-latest ${point ? '' : 'disabled'}>恢复上一个恢复点</button></div></section><section class="panel backup-danger-panel"><div class="panel-head"><div><span class="backup-kicker">Irreversible-looking Operation</span><h2>Dangerous Actions</h2></div></div><div class="panel-body"><p class="muted">清空将删除服务器当前业务数据。执行前服务器会创建最新恢复点，并继续要求两次确认；如需长期保留，请先导出完整备份。</p><button class="btn danger" data-clear-data>清空全部业务数据</button></div></section><section class="backup-format-note"><strong>Export formats</strong><span>完整备份 JSON：可用于完整恢复 · 产品 CSV：仅产品数据 · 订单 ZIP：单个订单的资料包，不是完整数据库备份。</span></section>`;
   }
   function renderUsers() {
     if (!isAdmin()) return '<div class="warning">此页面仅限管理员。</div>';
@@ -2338,33 +2417,33 @@
           `<tr><td><strong>${esc(user.displayName)}</strong><div class="record-sub">${esc(user.username)}</div></td><td>${esc(user.email || '—')}</td><td>${statusBadge(user.status)}</td><td>${user.createdAt ? new Date(user.createdAt).toLocaleString('zh-CN') : '—'}</td><td>${user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('zh-CN') : '尚未登录'}</td><td>${user.business?.customers || 0} / ${user.business?.orders || 0}</td><td><div class="user-actions"><button class="btn small" data-edit-employee="${esc(user.id)}">编辑</button><button class="btn small" data-reset-employee="${esc(user.id)}">重置密码</button><button class="btn small" data-transfer-employee="${esc(user.id)}">转移业务</button><button class="btn small ${user.status === 'ACTIVE' ? 'danger' : ''}" data-toggle-employee="${esc(user.id)}" data-status="${user.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE'}">${user.status === 'ACTIVE' ? '停用' : '启用'}</button></div></td></tr>`,
       )
       .join('');
-    return `<div class="toolbar"><span class="muted">系统固定一个ADMIN；这里只管理Employee。</span><button class="btn primary" data-new-employee>＋ 创建Employee</button></div><section class="panel"><div class="table-wrap"><table><thead><tr><th>Display Name / Username</th><th>Email</th><th>Status</th><th>Created</th><th>Last Login</th><th>Customers / Orders</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7"><div class="empty">暂无Employee账号</div></td></tr>'}</tbody></table></div></section>`;
+    return `<div class="toolbar"><span class="muted">系统只有一个管理员账号；这里管理员工账号。</span><button class="btn primary" data-new-employee>＋ 创建员工账号</button></div><section class="panel"><div class="table-wrap"><table><thead><tr><th>Display Name / Username</th><th>Email</th><th>Status</th><th>Created</th><th>Last Login</th><th>Customers / Orders</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7"><div class="empty">暂无员工账号</div></td></tr>'}</tbody></table></div></section>`;
   }
   function employeeForm(user = {}) {
-    return `<form id="employee-form" data-id="${esc(user.id || '')}"><div class="form-grid"><div class="field"><label class="required">Username</label><input name="username" value="${esc(user.username || '')}" required></div><div class="field"><label>Email</label><input name="email" type="email" value="${esc(user.email || '')}"></div><div class="field span-2"><label class="required">Display Name</label><input name="displayName" value="${esc(user.displayName || '')}" required></div>${user.id ? '' : `<div class="field span-2"><label class="required">Temporary Password</label><input name="temporaryPassword" type="password" minlength="${state.user.passwordMinLength || 8}" maxlength="1024" required><small class="field-hint">员工首次登录后必须修改临时密码。</small></div>`}</div><div class="modal-actions"><button type="button" class="btn" data-close-modal>取消</button><button type="submit" class="btn primary">保存Employee</button></div></form>`;
+    return `<form id="employee-form" data-id="${esc(user.id || '')}"><div class="form-grid"><div class="field"><label class="required">Username</label><input name="username" value="${esc(user.username || '')}" required></div><div class="field"><label>Email</label><input name="email" type="email" value="${esc(user.email || '')}"></div><div class="field span-2"><label class="required">Display Name</label><input name="displayName" value="${esc(user.displayName || '')}" required></div>${user.id ? '' : `<div class="field span-2"><label class="required">Temporary Password</label><input name="temporaryPassword" type="password" minlength="${state.user.passwordMinLength || 8}" maxlength="1024" required><small class="field-hint">员工首次登录后必须修改临时密码。</small></div>`}</div><div class="modal-actions"><button type="button" class="btn" data-close-modal>取消</button><button type="submit" class="btn primary">保存员工</button></div></form>`;
   }
   function resetEmployeeForm(id) {
-    return `<form id="employee-reset-form" data-id="${esc(id)}"><div class="field"><label class="required">Temporary Password</label><input name="temporaryPassword" type="password" minlength="${state.user.passwordMinLength || 8}" maxlength="1024" required><small class="field-hint">重置后所有旧Session立即失效，员工下次登录必须修改密码。</small></div><div class="modal-actions"><button type="button" class="btn" data-close-modal>取消</button><button type="submit" class="btn danger">确认重置</button></div></form>`;
+    return `<form id="employee-reset-form" data-id="${esc(id)}"><div class="field"><label class="required">Temporary Password</label><input name="temporaryPassword" type="password" minlength="${state.user.passwordMinLength || 8}" maxlength="1024" required><small class="field-hint">重置后原登录会话立即失效，员工下次登录必须修改密码。</small></div><div class="modal-actions"><button type="button" class="btn" data-close-modal>取消</button><button type="submit" class="btn danger">确认重置</button></div></form>`;
   }
   function transferEmployeeForm(employeeId) {
     const customers = state.customers.filter(
         (c) => DB.getMetadata('customers', c.id).ownerUserId === employeeId,
       ),
       targets = state.users.filter((user) => user.id !== employeeId && user.status === 'ACTIVE');
-    return `<form id="employee-transfer-form" data-id="${esc(employeeId)}"><div class="field"><label>Customer及全部关联业务</label><select name="customerId" required><option value="">请选择Customer</option>${customers.map((c) => `<option value="${esc(c.id)}">${esc(c.companyName || c.buyerName)}</option>`).join('')}</select><small class="field-hint">Customer、Orders、PI、CI、Packing Lists和Payments将原子转移。</small></div><div class="field"><label>转移给</label><select name="targetOwnerUserId" required><option value="">请选择Employee</option>${targets.map((user) => `<option value="${esc(user.id)}">${esc(user.displayName)} · ${esc(user.username)}</option>`).join('')}<option value="${esc(state.user.id)}">${esc(state.user.displayName || state.user.username)} · ADMIN</option></select></div>${customers.length ? '' : '<div class="info">该Employee当前没有可转移的Customer。</div>'}<div class="modal-actions"><button type="button" class="btn" data-close-modal>取消</button><button type="submit" class="btn primary" ${customers.length ? '' : 'disabled'}>确认转移</button></div></form>`;
+    return `<form id="employee-transfer-form" data-id="${esc(employeeId)}"><div class="field"><label>客户及全部关联业务</label><select name="customerId" required><option value="">请选择客户</option>${customers.map((c) => `<option value="${esc(c.id)}">${esc(c.companyName || c.buyerName)}</option>`).join('')}</select><small class="field-hint">客户、订单、PI、CI、装箱单和收款记录将一起转移。</small></div><div class="field"><label>转移给</label><select name="targetOwnerUserId" required><option value="">请选择员工</option>${targets.map((user) => `<option value="${esc(user.id)}">${esc(user.displayName)} · ${esc(user.username)}</option>`).join('')}<option value="${esc(state.user.id)}">${esc(state.user.displayName || state.user.username)} · 管理员</option></select></div>${customers.length ? '' : '<div class="info">该员工当前没有可转移的客户。</div>'}<div class="modal-actions"><button type="button" class="btn" data-close-modal>取消</button><button type="submit" class="btn primary" ${customers.length ? '' : 'disabled'}>确认转移</button></div></form>`;
   }
   function renderAudit() {
     const rows = state.auditLogs
       .map(
         (log) =>
-          `<tr><td>${new Date(log.createdAt).toLocaleString('zh-CN')}</td><td>${esc(log.username || '—')}</td><td><strong>${esc(log.action)}</strong></td><td>${esc(log.entityType)}${log.entityId ? `<div class="record-sub">${esc(log.entityId)}</div>` : ''}</td><td>${statusBadge(log.result)}</td><td>${esc(log.ipAddress || '—')}</td></tr>`,
+          `<tr><td>${new Date(log.createdAt).toLocaleString('zh-CN')}</td><td>${esc(log.username || '—')}</td><td><strong>${esc(I18N.auditAction(log.action))}</strong><div class="record-sub">${esc(log.action)}</div></td><td>${esc(I18N.entityType(log.entityType))}${log.entityId ? `<div class="record-sub">${esc(log.entityId)}</div>` : ''}</td><td>${statusBadge(log.result)}</td><td>${esc(log.ipAddress || '—')}</td></tr>`,
       )
       .join('');
-    return `<section class="panel"><div class="panel-head"><h2>${isAdmin() ? 'Audit Log' : 'My Activity'}</h2><button class="btn small" data-refresh-audit>刷新</button></div><div class="table-wrap"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Result</th><th>IP</th></tr></thead><tbody>${rows || '<tr><td colspan="6"><div class="empty">暂无操作记录</div></td></tr>'}</tbody></table></div></section>`;
+    return `<section class="panel"><div class="panel-head"><h2>${isAdmin() ? bi('操作日志', 'Audit Log') : bi('我的活动', 'My Activity')}</h2><button class="btn small" data-refresh-audit>刷新</button></div><div class="table-wrap"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Result</th><th>IP</th></tr></thead><tbody>${rows || '<tr><td colspan="6"><div class="empty">暂无操作记录</div></td></tr>'}</tbody></table></div></section>`;
   }
   function renderAccount() {
     const user = state.user || {};
-    return `<div class="split"><section class="panel"><div class="panel-head"><h2>Account Information</h2></div><div class="panel-body account-details"><div><span>Display Name</span><strong>${esc(user.displayName || user.username)}</strong></div><div><span>Username</span><strong>${esc(user.username)}</strong></div><div><span>Email</span><strong>${esc(user.email || '—')}</strong></div><div><span>Role</span><strong>${esc(user.role)}</strong></div></div></section><section class="panel"><div class="panel-head"><h2>Change Password</h2></div><div class="panel-body"><form id="my-password-form"><div class="field"><label>Current Password</label><input name="currentPassword" type="password" required></div><div class="field"><label>New Password</label><input name="newPassword" type="password" minlength="${user.passwordMinLength || 8}" maxlength="1024" required></div><div class="field"><label>Confirm New Password</label><input name="confirmPassword" type="password" minlength="${user.passwordMinLength || 8}" maxlength="1024" required></div><button class="btn primary" type="submit">修改密码</button></form></div></section></div>`;
+    return `<div class="split"><section class="panel"><div class="panel-head"><h2>Account Information</h2></div><div class="panel-body account-details"><div><span>Display Name</span><strong>${esc(user.displayName || user.username)}</strong></div><div><span>Username</span><strong>${esc(user.username)}</strong></div><div><span>Email</span><strong>${esc(user.email || '—')}</strong></div><div><span>Role</span><strong>${esc(roleLabel(user.role))}</strong></div></div></section><section class="panel"><div class="panel-head"><h2>Change Password</h2></div><div class="panel-body"><form id="my-password-form"><div class="field"><label>Current Password</label><input name="currentPassword" type="password" required></div><div class="field"><label>New Password</label><input name="newPassword" type="password" minlength="${user.passwordMinLength || 8}" maxlength="1024" required></div><div class="field"><label>Confirm New Password</label><input name="confirmPassword" type="password" minlength="${user.passwordMinLength || 8}" maxlength="1024" required></div><button class="btn primary" type="submit">修改密码</button></form></div></section></div>`;
   }
   async function openManagedPage(page) {
     if (page === 'users') state.users = await DB.listUsers();
@@ -2379,7 +2458,7 @@
     state.users = await DB.listUsers();
     closeModal();
     render();
-    toast(id ? 'Employee资料已保存' : 'Employee已创建，首次登录必须修改临时密码');
+    toast(id ? '员工资料已保存' : '员工账号已创建，首次登录必须修改临时密码');
   }
   async function resetEmployeePassword(form) {
     const d = Object.fromEntries(new FormData(form));
@@ -2387,7 +2466,7 @@
     state.users = await DB.listUsers();
     closeModal();
     render();
-    toast('临时密码已重置，旧Session已失效');
+    toast('临时密码已重置，原登录会话已失效');
   }
   async function transferEmployeeBusiness(form) {
     const d = Object.fromEntries(new FormData(form));
@@ -2395,7 +2474,7 @@
     await loadData();
     closeModal();
     render();
-    toast('Customer及关联业务已完成转移');
+    toast('客户及关联业务已完成转移');
   }
   function renderHelp() {
     return `<div class="split"><section class="panel"><div class="panel-head"><h2>快速上手</h2></div><div class="panel-body help-steps"><div class="help-step"><div><strong>填写公司资料</strong>在“公司设置”保存英文抬头、Logo、签名、印章及一个或多个收款账户。</div></div><div class="help-step"><div><strong>建立客户和产品库</strong>保存 Buyer、Consignee 和产品参数。HS Code 只会使用您填写的内容，系统不会猜测。</div></div><div class="help-step"><div><strong>创建订单</strong>选择客户和产品，输入数量、单价、运费、折扣与定金比例；金额、重量和 CBM 会自动计算。</div></div><div class="help-step"><div><strong>生成三种单据</strong>保存 PI 后，可从订单编辑页生成 CI 和 Packing List；也可直接进入单据预览。</div></div><div class="help-step"><div><strong>导出和归档</strong>单独导出 PDF，或批量导出订单 ZIP，内含三份 PDF、JSON 和附件。</div></div><div class="help-step"><div><strong>定期备份</strong>在“数据备份”导出 JSON。恢复前服务器会保留当前状态作为恢复点。</div></div></div></section><section class="panel"><div class="panel-head"><h2>重要说明</h2></div><div class="panel-body grid"><div class="info"><strong>服务器存储：</strong>登录后通过受保护 API 读写 SQLite；API 不可用时不会回退到浏览器 IndexedDB。</div><div class="warning"><strong>数据安全：</strong>签名、公章、银行账户和客户资料属于敏感数据，请使用 HTTPS 并定期导出完整备份。</div><div><strong>编号规则</strong><p class="muted">PI/CI/PL 按月份从 001 自动递增，并允许手动修改；保存时会校验重复编号。</p></div><div><strong>PDF 与打印</strong><p class="muted">单据使用 A4 页面和英文内容。长产品表自动分页并重复表头；若系统阻止多文件下载，请使用订单 ZIP。</p></div><div><strong>支持的附件</strong><p class="muted">付款水单、销售合同、聊天截图、物流单据、提单、报关资料、产品照片和签收证明等。</p></div></div></section></div>`;
@@ -2423,34 +2502,42 @@
           return;
         }
         if (t.hasAttribute('data-new-employee')) {
-          openModal('创建Employee', employeeForm(), false);
+          openModal('创建员工账号 / New Employee', employeeForm(), false);
           return;
         }
         if (t.dataset.editEmployee) {
           const user = state.users.find((item) => item.id === t.dataset.editEmployee);
-          if (user) openModal('编辑Employee', employeeForm(user), false);
+          if (user) openModal('编辑员工 / Edit Employee', employeeForm(user), false);
           return;
         }
         if (t.dataset.resetEmployee) {
-          openModal('重置Employee密码', resetEmployeeForm(t.dataset.resetEmployee), false);
+          openModal(
+            '重置员工密码 / Reset Password',
+            resetEmployeeForm(t.dataset.resetEmployee),
+            false,
+          );
           return;
         }
         if (t.dataset.transferEmployee) {
-          openModal('转移Employee业务', transferEmployeeForm(t.dataset.transferEmployee), false);
+          openModal(
+            '转移员工业务 / Transfer Business',
+            transferEmployeeForm(t.dataset.transferEmployee),
+            false,
+          );
           return;
         }
         if (t.dataset.toggleEmployee) {
           const action = t.dataset.status === 'ACTIVE' ? '重新启用' : '停用';
           if (
             !confirm(
-              `确定${action}此Employee吗？${t.dataset.status === 'DISABLED' ? '其全部现有Session将立即失效。' : ''}`,
+              `确定${action}此员工账号吗？${t.dataset.status === 'DISABLED' ? '其全部现有登录会话将立即失效。' : ''}`,
             )
           )
             return;
           await DB.setEmployeeStatus(t.dataset.toggleEmployee, t.dataset.status);
           state.users = await DB.listUsers();
           render();
-          toast(`Employee已${action}`);
+          toast(`员工账号已${action}`);
           return;
         }
         if (t.hasAttribute('data-refresh-audit')) {
@@ -2484,40 +2571,49 @@
           await copyOrder(t.dataset.copyOrder);
           return;
         }
-        if (t.dataset.deleteOrder) {
-          await deleteOrder(t.dataset.deleteOrder);
+        if (t.dataset.recordView) {
+          await setRecordView(t.dataset.recordView, t.dataset.view);
+          return;
+        }
+        if (t.hasAttribute('data-archive-record')) {
+          await archiveRecord(t.dataset.store, t.dataset.id);
+          return;
+        }
+        if (t.hasAttribute('data-restore-record')) {
+          await restoreRecord(t.dataset.store, t.dataset.id);
+          return;
+        }
+        if (t.hasAttribute('data-delete-record')) {
+          await startPermanentDelete(t.dataset.store, t.dataset.id);
           return;
         }
         if (t.hasAttribute('data-new-customer')) {
-          openModal('新增客户', customerForm(), true);
+          openModal('新增客户 / New Customer', customerForm(), true);
           return;
         }
         if (t.dataset.editCustomer) {
           openModal(
-            '编辑客户',
+            '编辑客户 / Edit Customer',
             customerForm(state.customers.find((x) => x.id === t.dataset.editCustomer)),
             true,
           );
           return;
         }
-        if (t.dataset.deleteCustomer) {
-          await deleteCustomer(t.dataset.deleteCustomer);
+        if (t.dataset.viewCustomer) {
+          const customer = lifecycleRecord('customers', t.dataset.viewCustomer);
+          if (customer) openModal('客户详情 / Customer Details', customerDetail(customer), true);
           return;
         }
         if (t.hasAttribute('data-new-product')) {
-          openModal('新增产品', productForm(), true);
+          openModal('新增产品 / New Product', productForm(), true);
           return;
         }
         if (t.dataset.editProduct) {
           openModal(
-            '编辑产品',
+            '编辑产品 / Edit Product',
             productForm(state.products.find((x) => x.id === t.dataset.editProduct)),
             true,
           );
-          return;
-        }
-        if (t.dataset.deleteProduct) {
-          await deleteProduct(t.dataset.deleteProduct);
           return;
         }
         if (t.hasAttribute('data-export-csv')) {
@@ -2695,7 +2791,18 @@
           return;
         }
         if (t.dataset.deleteAccount !== undefined) {
-          if (confirm('确定删除此收款账户吗？')) t.closest('.account-card').remove();
+          const card = t.closest('.account-card'),
+            accountId = card?.dataset.id,
+            used = accountId
+              ? state.orders.filter((o) => o.paymentAccountId === accountId).length
+              : 0;
+          if (used) {
+            alert(
+              `该收款账户已被 ${used} 个订单使用，不能删除。可以修改账户资料；订单不再使用后才能删除。`,
+            );
+            return;
+          }
+          if (confirm('确定删除此收款账户吗？保存公司设置后生效。')) card.remove();
           return;
         }
         if (t.dataset.viewCompanyImage) {
@@ -2813,6 +2920,7 @@
         if (e.target.id === 'order-form') await saveOrder(false);
         if (e.target.id === 'packing-list-form') await savePackingList(true);
         if (e.target.id === 'customer-form') await saveCustomer(e.target);
+        if (e.target.id === 'permanent-delete-form') await confirmPermanentDelete(e.target);
         if (e.target.id === 'product-form') await saveProduct(e.target);
         if (e.target.id === 'company-form') await saveCompany(e.target);
         if (e.target.id === 'employee-form') await saveEmployee(e.target);
@@ -2824,7 +2932,7 @@
           state.user = { ...state.user, ...result.user };
           e.target.reset();
           applyRoleUI();
-          toast('密码已修改，其他旧Session已失效');
+          toast('密码已修改，其他登录会话已失效');
         }
       } catch (err) {
         reportDataError(err);
@@ -2845,6 +2953,10 @@
         state.filters.q = e.target.value;
         render();
         $('#order-search')?.focus();
+      }
+      if (e.target.id === 'permanent-delete-confirm') {
+        const submit = e.target.form?.querySelector('[type="submit"]');
+        if (submit) submit.disabled = e.target.value.trim() !== PERMANENT_DELETE_PHRASE;
       }
       if (e.target.id === 'customer-search') {
         state.filters.customerQ = e.target.value;
@@ -2951,7 +3063,7 @@
         }
         if (e.target.name === 'status') {
           if (['Shipped', 'Completed'].includes(o.status) && !C.actualShipmentDate(o))
-            toast('请先填写 Actual Shipment Date', 'warning');
+            toast('请先填写实际发货日期', 'warning');
           state.currentOrder = o;
           render();
           markDirty();
@@ -3055,7 +3167,7 @@
   }
   function openProductPicker() {
     const q = `<div class="toolbar"><div class="search"><input id="picker-search" placeholder="搜索产品"></div></div><form id="product-picker"><div class="table-wrap"><table><thead><tr><th></th><th>产品</th><th>SKU / Model</th><th>单价</th><th>单位</th></tr></thead><tbody>${state.products.map((p) => `<tr data-picker-row data-search="${esc(`${p.englishName} ${p.chineseName} ${p.sku} ${p.model}`.toLowerCase())}"><td><input type="checkbox" name="product" value="${esc(p.id)}"></td><td><strong>${esc(p.englishName)}</strong><div class="record-sub">${esc(p.chineseName)}</div></td><td>${esc(p.sku)} / ${esc(p.model)}</td><td>${C.money(p.defaultPrice).toFixed(2)}</td><td>${esc(p.unit)}</td></tr>`).join('')}</tbody></table></div><div class="modal-actions"><button type="button" class="btn" data-close-modal>取消</button><button type="button" class="btn primary" data-add-selected-products>添加到订单</button></div></form>`;
-    openModal('从产品库选择', q, true);
+    openModal('从产品库选择 / Select Products', q, true);
     $('#picker-search').addEventListener('input', (e) => {
       $$('[data-picker-row]').forEach(
         (r) => (r.hidden = !r.dataset.search.includes(e.target.value.toLowerCase())),
@@ -3209,29 +3321,146 @@
     render();
     toast('订单已复制为新草稿');
   }
-  async function deleteOrder(id) {
-    if (!confirm('确定作废此订单吗？订单历史、PI、CI、Packing List、付款记录和Audit Log都会保留。'))
+  // Archive (orders: void) keeps the record and its history and can be undone.
+  // Permanent deletion is a separate, server-checked action with its own confirmation.
+  const LIFECYCLE = {
+    customers: {
+      name: '客户',
+      archive: '归档',
+      archived: '已归档',
+      label: (c) => customerLabel(c),
+      archiveConfirm: (c) =>
+        state.orders.some((o) => o.customerId === c.id)
+          ? '该客户已有订单。归档后客户不再出现在列表和新订单中，订单和正式单据不受影响，之后可随时恢复。确定归档吗？'
+          : '归档后客户不再出现在列表和新订单中，之后可随时恢复。确定归档吗？',
+    },
+    products: {
+      name: '产品',
+      archive: '归档',
+      archived: '已归档',
+      label: (p) => p.englishName || p.chineseName || p.sku || '-',
+      archiveConfirm: () =>
+        '归档后产品不再出现在产品库中，已保存订单中的产品资料不受影响，之后可随时恢复。确定归档吗？',
+    },
+    orders: {
+      name: '订单',
+      archive: '作废',
+      archived: '已作废',
+      label: (o) => o.orderNumber || o.piNumber || '-',
+      archiveConfirm: () =>
+        '确定作废此订单吗？订单、PI、CI、Packing List、收款记录和操作日志都会保留，之后可随时恢复。',
+    },
+  };
+  const PERMANENT_DELETE_PHRASE = '永久删除';
+  const BLOCKER_TEXT = {
+    CUSTOMER_HAS_ORDERS: (n) => `已有 ${n} 个订单使用该客户（包括已作废订单）`,
+    PRODUCT_USED_BY_ORDERS: (n) => `已有 ${n} 个订单使用该产品（包括已作废订单）`,
+    ORDER_HAS_FINAL_PI: () => '已生成 Final PI',
+    ORDER_HAS_CI: () => '已生成商业发票（CI）',
+    ORDER_HAS_PACKING_LIST: () => '已生成装箱单（Packing List）',
+    ORDER_HAS_PAYMENTS: (n) => `已有 ${n} 条收款记录`,
+  };
+  function customerLabel(c = {}) {
+    return c.companyName && c.buyerType === 'Company'
+      ? c.companyName
+      : c.buyerName || c.companyName || '-';
+  }
+  const viewKey = (store) => `${store}View`;
+  const isArchivedView = (store) => state.filters[viewKey(store)] === 'archived';
+  function lifecycleRecord(store, id) {
+    return (
+      state[store].find((x) => x.id === id) ||
+      state.archived[store].find((x) => x.id === id) ||
+      null
+    );
+  }
+  async function refreshLifecycleLists(store) {
+    await loadData();
+    if (isArchivedView(store)) state.archived[store] = await DB.getAll(store, { archived: true });
+  }
+  async function setRecordView(store, view) {
+    state.filters[viewKey(store)] = view === 'archived' ? 'archived' : 'active';
+    if (view === 'archived') state.archived[store] = await DB.getAll(store, { archived: true });
+    render();
+  }
+  function recordViewSwitch(store) {
+    const archived = isArchivedView(store),
+      words = LIFECYCLE[store];
+    return `<div class="view-switch" role="group" aria-label="${words.name}状态"><button type="button" class="${archived ? '' : 'active'}" data-record-view="${store}" data-view="active" aria-pressed="${!archived}">${store === 'orders' ? '进行中' : '使用中'}</button><button type="button" class="${archived ? 'active' : ''}" data-record-view="${store}" data-view="archived" aria-pressed="${archived}">${words.archived}</button></div>`;
+  }
+  // Row actions shared by the customer, product and order lists.
+  function lifecycleActions(store, id, { canDelete = true } = {}) {
+    const words = LIFECYCLE[store],
+      attrs = `data-store="${store}" data-id="${esc(id)}"`;
+    const remove = canDelete
+      ? `<button class="btn small danger" data-delete-record ${attrs}>删除</button>`
+      : '';
+    return isArchivedView(store)
+      ? `<button class="btn small" data-restore-record ${attrs}>恢复</button>${remove}`
+      : `<button class="btn small" data-archive-record ${attrs}>${words.archive}</button>${remove}`;
+  }
+  async function archiveRecord(store, id) {
+    const words = LIFECYCLE[store],
+      record = lifecycleRecord(store, id) || { id };
+    if (!confirm(words.archiveConfirm(record))) return;
+    await DB.archive(store, id);
+    await refreshLifecycleLists(store);
+    closeModal();
+    render();
+    toast(`${words.name}已${words.archive}，可在“${words.archived}”中恢复`);
+  }
+  async function restoreRecord(store, id) {
+    const words = LIFECYCLE[store];
+    await DB.restore(store, id);
+    await refreshLifecycleLists(store);
+    closeModal();
+    render();
+    toast(`${words.name}已恢复`);
+  }
+  function deleteSummary(store, record) {
+    const words = LIFECYCLE[store],
+      lifecycle = DB.getMetadata(store, record.id).lifecycleState;
+    const archived = lifecycle && lifecycle !== 'ACTIVE';
+    return `<div class="delete-summary"><span class="delete-kind" data-no-i18n>${words.name}</span><strong data-no-i18n>${esc(words.label(record))}</strong>${archived ? `<span class="delete-state">${words.archived}</span>` : ''}</div>`;
+  }
+  async function startPermanentDelete(store, id) {
+    const words = LIFECYCLE[store],
+      record = lifecycleRecord(store, id);
+    if (!record) {
+      toast('记录已不存在，请刷新页面', 'error');
       return;
-    await DB.remove('orders', id);
-    await loadData();
-    render();
-    toast('订单已作废');
+    }
+    const check = await DB.deletionCheck(store, id),
+      archived = (DB.getMetadata(store, id).lifecycleState || 'ACTIVE') !== 'ACTIVE';
+    if (!check.deletable) {
+      const reasons = check.blockers
+        .map((b) => `<li>${esc(BLOCKER_TEXT[b.code]?.(b.count) || b.message || b.code)}</li>`)
+        .join('');
+      openModal(
+        '无法永久删除 / Cannot Delete',
+        `<div class="delete-dialog">${deleteSummary(store, record)}<div class="delete-blocked"><strong>该${words.name}仍被其他业务资料使用：</strong><ul>${reasons}</ul><p>为保护正式单据和历史记录，存在关联时不能永久删除。${archived ? `该${words.name}已${words.archive}，记录会继续保留。` : `可以改为${words.archive}：记录和历史会保留，之后可随时恢复。`}</p></div><div class="modal-actions"><button type="button" class="btn" data-close-modal>关闭</button>${archived ? '' : `<button type="button" class="btn primary" data-archive-record data-store="${store}" data-id="${esc(id)}">改为${words.archive}</button>`}</div></div>`,
+      );
+      return;
+    }
+    openModal(
+      '永久删除 / Delete Permanently',
+      `<form id="permanent-delete-form" class="delete-dialog" data-store="${store}" data-id="${esc(id)}">${deleteSummary(store, record)}<div class="delete-warning"><strong>此操作不可撤销</strong><p>该${words.name}将从服务器数据库中彻底删除，无法通过“恢复”找回。其他${store === 'products' ? '产品' : '客户'}、订单和已生成的正式单据不受影响。如只是暂时不用，请改为${words.archive}。</p></div><div class="field"><label for="permanent-delete-confirm">${bi(`请输入“${PERMANENT_DELETE_PHRASE}”以确认`, 'Type the phrase to confirm')}</label><input id="permanent-delete-confirm" name="confirmation" autocomplete="off" placeholder="${PERMANENT_DELETE_PHRASE}"></div><div class="modal-actions"><button type="button" class="btn" data-close-modal>取消</button><button type="submit" class="btn danger-solid" disabled>永久删除</button></div></form>`,
+    );
+    $('#permanent-delete-confirm')?.focus();
   }
-  async function deleteCustomer(id) {
-    const used = state.orders.some((o) => o.customerId === id);
-    if (used && !confirm('该客户已有历史订单。归档不会删除订单或正式单据，确定归档吗？')) return;
-    if (!used && !confirm('确定归档此客户吗？')) return;
-    await DB.remove('customers', id);
-    await loadData();
+  async function confirmPermanentDelete(form) {
+    const store = form.dataset.store,
+      id = form.dataset.id,
+      words = LIFECYCLE[store];
+    if (form.confirmation.value.trim() !== PERMANENT_DELETE_PHRASE) {
+      toast(`请输入“${PERMANENT_DELETE_PHRASE}”以确认`, 'error');
+      return;
+    }
+    await DB.permanentDelete(store, id, PERMANENT_DELETE_PHRASE);
+    await refreshLifecycleLists(store);
+    closeModal();
     render();
-    toast('客户已归档');
-  }
-  async function deleteProduct(id) {
-    if (!confirm('确定归档此产品吗？已保存订单中的产品快照不会受影响。')) return;
-    await DB.remove('products', id);
-    await loadData();
-    render();
-    toast('产品已归档');
+    toast(`${words.name}已永久删除`);
   }
   async function previewDraftPI() {
     if (!(await saveOrder(false))) return;
@@ -3245,7 +3474,7 @@
     if (!errors.length) return;
     toast(errors[0], 'error');
     openModal(
-      '无法生成Final PI',
+      '无法生成 Final PI / Cannot Finalize PI',
       `<div class="warning"><strong>请先完成以下内容：</strong></div><ul class="final-error-list">${errors.map((error) => `<li>${esc(error)}</li>`).join('')}</ul><div class="modal-actions"><button type="button" class="btn primary" data-close-modal>返回订单修改</button></div>`,
     );
   }
@@ -3356,7 +3585,7 @@
     const ix = state.orders.findIndex((x) => x.id === created.id);
     if (ix >= 0) state.orders[ix] = created;
     render();
-    toast(`已从Final PI生成 ${created.ciNumber}，Actual Transport Method待确认`);
+    toast(`已从Final PI生成 ${created.ciNumber}，实际运输方式待确认`);
   }
   async function generatePL() {
     state.currentOrder = readOrderForm();

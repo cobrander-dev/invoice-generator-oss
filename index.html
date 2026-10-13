@@ -5,18 +5,18 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>外贸单据生成器</title>
-  <link rel="stylesheet" href="css/styles.css?v=20260720-packing-flow">
+  <link rel="stylesheet" href="css/styles.css?v=20261014-bilingual">
 </head>
 <body>
   <div id="app" class="app-shell">
     <aside class="sidebar">
       <div class="brand"><span class="brand-mark">FT</span><div><strong>外贸单据</strong><small>服务器工作台</small></div></div>
       <nav id="main-nav" aria-label="主导航">
-        <div class="nav-group"><span class="nav-group-label">WORKFLOW</span><button data-page="dashboard" class="active"><span>⌂</span>首页仪表盘</button><button data-page="orders"><span>▤</span>订单管理</button><button data-page="preview"><span>▣</span>单据预览</button></div>
-        <div class="nav-group"><span class="nav-group-label">MASTER DATA</span><button data-page="customers"><span>♙</span>客户管理</button><button data-page="products"><span>◇</span>产品管理</button><button data-page="company"><span>⚙</span>公司设置</button></div>
-        <div class="nav-group"><span class="nav-group-label">DATA SAFETY</span><button data-page="backup"><span>↕</span>数据备份</button></div>
-        <div class="nav-group"><span class="nav-group-label">ACCOUNT</span><button data-page="users" data-admin-only><span>♙</span>用户管理</button><button data-page="audit" data-admin-label="操作日志" data-employee-label="我的活动"><span>≡</span>操作日志</button><button data-page="account"><span>◎</span>我的账号</button></div>
-        <div class="nav-group"><span class="nav-group-label">HELP</span><button data-page="help"><span>?</span>使用帮助</button></div>
+        <div class="nav-group"><span class="nav-group-label">业务流程</span><button data-page="dashboard" class="active"><span>⌂</span>首页仪表盘</button><button data-page="orders"><span>▤</span>订单管理</button><button data-page="preview"><span>▣</span>单据预览</button></div>
+        <div class="nav-group"><span class="nav-group-label">基础资料</span><button data-page="customers"><span>♙</span>客户管理</button><button data-page="products"><span>◇</span>产品管理</button><button data-page="company"><span>⚙</span>公司设置</button></div>
+        <div class="nav-group"><span class="nav-group-label">数据安全</span><button data-page="backup"><span>↕</span>数据备份</button></div>
+        <div class="nav-group"><span class="nav-group-label">账号</span><button data-page="users" data-admin-only><span>♙</span>用户管理</button><button data-page="audit" data-admin-label="操作日志" data-employee-label="我的活动"><span>≡</span>操作日志</button><button data-page="account"><span>◎</span>我的账号</button></div>
+        <div class="nav-group"><span class="nav-group-label">帮助</span><button data-page="help"><span>?</span>使用帮助</button></div>
       </nav>
       <div class="local-badge"><span class="status-dot"></span><div><strong>服务器模式</strong><small>SQLite 安全存储</small></div></div>
     </aside>
@@ -32,9 +32,10 @@
   <script src="node_modules/jspdf-autotable/dist/jspdf.plugin.autotable.min.js"></script>
   <script src="node_modules/jszip/dist/jszip.min.js"></script>
   <script src="js/core.js?v=20260720-packing-flow"></script>
-  <script src="js/api-db.js?v=20260907-server-data"></script>
+  <script src="js/api-db.js?v=20261014-lifecycle"></script>
   <script src="js/sample-data.js?v=20260718-order-stages"></script>
   <script src="js/pdf.js?v=20260720-packing-flow"></script>
-  <script src="js/app.js?v=20260720-packing-flow"></script>
+  <script src="js/i18n.js?v=20261014-bilingual"></script>
+  <script src="js/app.js?v=20261014-bilingual"></script>
 </body>
 </html>

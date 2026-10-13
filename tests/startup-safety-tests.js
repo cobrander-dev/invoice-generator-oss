@@ -70,7 +70,8 @@ async function isolated(run) {
     document: { querySelector: () => ({ innerHTML: '' }) },
   });
   context.window = context;
-  for (const file of ['core.js', 'sample-data.js', 'db.js']) {
+  // Same order as index.html: i18n.js must be loaded before app.js.
+  for (const file of ['core.js', 'sample-data.js', 'db.js', 'i18n.js']) {
     let source = fs.readFileSync(path.join(root, 'js', file), 'utf8');
     if (file === 'db.js') {
       const isolated = source.replace(/DB_NAME\s*=\s*'foreign-trade-docs'/, `DB_NAME='${name}'`);

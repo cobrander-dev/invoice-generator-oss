@@ -1,6 +1,6 @@
 # Invoice Generator OSS
 
-自托管的外贸单据系统：管理公司资料、客户、产品和订单，生成英文 Proforma Invoice（PI）、Commercial Invoice（CI）和 Packing List PDF。中文操作界面，单公司多账号，数据保存在你自己的服务器上。
+自托管的外贸单据系统：管理公司资料、客户、产品和订单，生成英文 Proforma Invoice（PI）、Commercial Invoice（CI）和 Packing List PDF。中英双语管理界面（中文为主），单公司多账号，数据保存在你自己的服务器上。
 
 ```text
 Browser -> HTTPS / Caddy -> Node.js / Express -> SQLite（Docker 持久卷）
@@ -10,6 +10,7 @@ Browser -> HTTPS / Caddy -> Node.js / Express -> SQLite（Docker 持久卷）
 
 - 公司资料、多币种收款账户（USD / EUR / GBP 等）、Logo、签名与公章
 - 客户（Buyer / Consignee）和产品库，产品 CSV 批量导入
+- 归档与恢复，以及有关联保护的永久删除：仍被订单、正式单据或收款记录使用的资料只能归档（订单为作废）
 - 订单：Draft、Final 和 Revised PI；从 PI 生成 CI 并确认差异
 - Packing List：箱数、净重/毛重、尺寸和 CBM
 - Payment Tracking：定金/尾款、付款水单附件

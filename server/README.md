@@ -41,14 +41,21 @@ Employee使用临时密码首次登录时必须先修改密码。Disable、管�
 | `POST /api/server-backup/import` | 同一事务创建latest恢复点并完整替换 |
 | `POST /api/server-backup/restore` | 同一事务恢复latest，不影响认证表 |
 | `POST /api/server-backup/clear` | 精确确认“清空数据”后创建恢复点并清空业务数据 |
-| `GET/PUT /api/company/main` | 公司主资料，使用rowVersion并发检查 |
+| `GET/PUT /api/company/main` | 公司主资料，使用rowVersion并发检查；仍被订单使用的收款账户不能删除（409 `DELETE_BLOCKED`） |
 | `GET/POST/PUT/DELETE /api/customers` | Owner隔离的客户CRUD；DELETE只归档，不物理删除 |
 | `GET/POST/PUT/DELETE /api/products` | 全公司共享产品CRUD；DELETE只归档，不物理删除 |
 | `POST /api/products/bulk` | Product CSV单事务批量写入 |
 | `GET/POST/PUT/DELETE /api/orders` | Owner隔离的订单CRUD；创建继承Customer Owner，DELETE只Void并保留全部单据/付款历史 |
+| `GET /api/{customers,products,orders}?view=archived` | 已归档客户/产品、已作废订单列表（同样执行Owner隔离） |
+| `POST /api/{customers,products,orders}/:id/archive` | 归档（订单为作废），与DELETE相同，可恢复 |
+| `POST /api/{customers,products,orders}/:id/restore` | 恢复为使用中 |
+| `GET /api/{customers,products,orders}/:id/deletion-check` | 返回能否永久删除及阻止原因 |
+| `POST /api/{customers,products,orders}/:id/permanent-delete` | 永久删除：需If-Match与`{"confirmation":"永久删除"}`；存在关联时返回409 `DELETE_BLOCKED`及原因 |
 | `GET /api/packing-lists` | Packing List列表和单条读取 |
 | `GET/PUT /api/meta/:id` | 仅按明确meta key读写 |
 | `GET /api/server-backup/restore-point` | 读取唯一latest恢复点 |
+
+永久删除规则：客户被任何订单（含已作废订单）使用时不能删除；产品只能由ADMIN删除，且被任何订单行使用时不能删除；订单已有Final PI、CI、Packing List或收款记录时只能作废。客户和订单只能由Owner或ADMIN删除，其他员工得到404。删除与审计日志（`PERMANENT_DELETE_*`，记录名称或编号）在同一事务中提交，已分配的单据编号不会被重新使用。
 
 所有业务写入接口均复用Phase 1的Session、精确Origin和CSRF边界。业务JSON请求上限默认64MB，兼容Base64签章和附件；响应与错误处理不记录完整请求。更新和删除必须携带已读取的rowVersion，409不会自动覆盖、重试或刷新表单。
 
@@ -120,6 +127,8 @@ Phase 5增加非root应用镜像、Caddy自动HTTPS、named volumes、Production
 `npm run test:server:phase3`运行固定CRUD路由、CSRF、rowVersion/409、产品批量事务、Packing List双写、服务器Backup/Clear及`api-db.js`错误映射和无IndexedDB fallback测试。
 
 `npm run test:server:phase4`运行服务器权威编号、导入/恢复sequence同步、Final/Revised PI、CI差异、Packing List、付款重算、普通PUT防篡改及双客户端并发测试。
+
+`npm run test:server:delete`运行归档、恢复与永久删除的权限、跨用户隔离、关联保护和审计测试。`npm run test:browser`用无头Chrome验证管理界面的中英双语、客户表单桌面/手机布局、归档/恢复/永久删除流程和角色权限（需本机Chrome，或设置`CHROME_PATH`）。
 
 `npm run test:server:multi-user`运行唯一ADMIN、账号状态/密码/Session失效、Owner隔离与转移、共享Product、公司资料只读、业务单据权限、Archive/Void、Audit原子性及Backup兼容测试。
 
