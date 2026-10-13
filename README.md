@@ -28,73 +28,83 @@ Browser -> HTTPS / Caddy -> Node.js / Express -> SQLite（Docker 持久卷）
 
 漏洞报告方式见 [SECURITY.md](SECURITY.md)。
 
-## 安装
+## 一键安装
 
-> 面向普通用户的一键安装程序（域名 / 公网 IP 两种模式）正在开发中。下面是当前可用的 Docker 部署方式，需要一台 Ubuntu 服务器、指向服务器的域名，并开放 TCP 80/443。
+在一台 Ubuntu 22.04 / 24.04 或 Debian 12 / 13 服务器（x86_64 或 arm64）上以 root 运行：
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git
-sudo git clone https://github.com/cobrander-dev/invoice-generator-oss.git /opt/invoice-generator
-sudo /opt/invoice-generator/deploy/install.sh
+curl -fsSLO https://github.com/cobrander-dev/invoice-generator-oss/releases/latest/download/install.sh
+sudo bash install.sh
 ```
 
-安装器会：检查 Ubuntu，从 Docker 官方源安装 Docker Engine 与 Compose 插件；询问域名；生成随机 `SESSION_SECRET` 并写入 0600 权限的 `.env`；构建并启动容器；等待健康检查；以隐藏输入创建首个管理员。重复运行不会覆盖已有 `.env`、数据或管理员。
+安装程序全程中文交互：
 
-如果服务器上已有正在运行并占用 80/443 的宿主机 Caddy，安装器会自动切换为 `EXISTING_HOST_CADDY` 模式：只启动应用并绑定 `127.0.0.1:3001`，在验证并备份原 Caddyfile 后追加一个站点，原有站点保持不变；任何一步失败都会恢复备份。
+1. 检测系统；未安装 Docker 时询问后从 Docker 官方源安装（先核对官方 GPG 密钥指纹）。
+2. 下载安装包，并用 `install.sh` 内嵌的 SHA-256 校验；安装包内每个文件再按清单校验，镜像按 digest 固定。
+3. 输入访问地址：**有域名填域名，没有域名直接回车使用服务器公网 IP**。
+4. 自动生成安全密钥，启动服务，创建管理员（密码隐藏输入）。
+5. 启用每日自动备份，安装 `invoice-generator` 管理命令。
 
-### 手动 Docker 部署
+推荐 2 vCPU / 2 GiB 内存 / 20 GiB 磁盘。云服务器请在安全组放行 TCP 80 和 443。再次运行 `install.sh` 会打开管理菜单，不会覆盖已有安装。
+
+| 场景 | HTTPS |
+| --- | --- |
+| 有域名，80/443 空闲 | 内置 Caddy 自动申请并续期证书 |
+| 无域名，使用公网 IP | 优先申请 Let's Encrypt 短期 IP 证书并自动续期；失败时使用本机 CA 证书，`invoice-generator https` 可导出根证书及指纹 |
+| 80/443 已被 Nginx / Caddy 占用 | 应用只监听 `127.0.0.1:3001`，在 `/opt/invoice-generator/proxy` 生成 Nginx 和 Caddy 配置示例；检测到运行中的宿主机 Caddy 时可自动添加站点（先校验并备份原配置，失败自动恢复） |
+
+安装只使用名为 `invoice-generator` 的 Docker Compose 项目、`/opt/invoice-generator` 目录和 `invoice-generator_*` 数据卷。若检测到同名但不是本程序创建的项目或数据卷，安装会停止，不会覆盖。
+
+## 日常管理
 
 ```bash
-cp .env.example .env
-chmod 600 .env
-openssl rand -hex 48   # 将结果写入 .env 的 SESSION_SECRET
-# 将 DOMAIN 和 APP_ORIGIN 改为你的真实域名
-docker compose config --quiet
+sudo invoice-generator            # 中文管理菜单
+sudo invoice-generator status     # 运行状态
+sudo invoice-generator doctor     # 只读健康检查
+sudo invoice-generator backup     # 立即备份
+sudo invoice-generator backups    # 列出备份
+sudo invoice-generator restore <备份文件>
+sudo invoice-generator upgrade    # 升级到最新版本
+sudo invoice-generator logs       # 查看日志
+sudo invoice-generator https      # HTTPS 证书信息
+sudo invoice-generator reset-admin-password
+```
+
+详细说明见 [docs/INSTALL.md](docs/INSTALL.md)。
+
+## 备份与恢复
+
+- **自动备份**：每天 03:30 左右自动备份，保留最近 14 份自动备份。手动、升级前和恢复前的备份不会被自动删除。
+- **备份内容**：使用 SQLite 在线备份 API 生成一致性副本，经完整性检查后压缩，附 SHA-256 校验文件，保存在 `/opt/invoice-generator/backups`（0700）。备份包含业务数据、账号和 Session，请复制到服务器以外的安全位置并妥善加密保存。
+- **恢复**：`restore` 先校验备份的 SHA-256、完整性和数据库版本，要求输入 `RESTORE` 确认，并在恢复前自动再备份一次当前数据；恢复后应用无法启动时自动还原。
+- **应用内 Full Backup JSON**：在“数据备份”页面导出业务数据，不含账号、密码哈希、Session 和 Audit Log。
+
+严禁执行 `docker compose down -v`、`docker volume prune` 或 `docker system prune`，它们会删除数据卷。
+
+## 升级
+
+`sudo invoice-generator upgrade`（或 `upgrade v1.2.3`）依次：校验新版本安装包 → 备份当前数据 → 在无网络的隔离容器中用备份副本启动新版本并验证数据库迁移 → 停止服务并做最终备份 → 切换到新版本并检查健康。任何一步失败都不会切换；切换后启动失败会自动回滚到原版本和升级前数据。不支持降级。
+
+## 从源码部署（高级）
+
+不使用安装程序时，可用仓库中的 `docker-compose.yml` 自行构建：
+
+```bash
+cp .env.example .env && chmod 600 .env
+openssl rand -hex 48   # 写入 .env 的 SESSION_SECRET，并修改 DOMAIN 和 APP_ORIGIN
 docker compose build --pull app
 docker compose up -d
+printf '%s' "$ADMIN_PASSWORD" | docker compose exec -T -e ADMIN_USERNAME=admin -e ADMIN_PASSWORD_STDIN=1 app npm run admin:init
 ```
-
-然后按下文“管理员”一节初始化管理员。管理员凭据不能长期写入 `.env`。
-
-## 配置
 
 | 变量 | 说明 |
 | --- | --- |
-| `NODE_ENV=production` | 启用 Production Cookie 和 HTTPS 要求 |
-| `DOMAIN` | 部署域名，不含协议 |
-| `APP_ORIGIN=https://...` | CSRF / Origin 精确允许值，必须与 `DOMAIN` 一致 |
-| `DEPLOYMENT_MODE` | `BUNDLED_CADDY` 或 `EXISTING_HOST_CADDY`，安装器自动写入 |
-| `DATABASE_PATH=/app/data/foreign-trade.sqlite` | 持久卷中的 SQLite 路径 |
+| `APP_ORIGIN=https://...` | CSRF / Origin 精确允许值 |
+| `DATABASE_PATH` | 持久卷中的 SQLite 路径 |
 | `SESSION_SECRET` | 至少 32 字节随机值 |
 | `PASSWORD_MIN_LENGTH` | 密码最小长度，默认 8，最大 128 |
 | `BUSINESS_BACKUP_LIMIT` | Full Backup JSON 请求大小上限，默认 `64mb` |
-| `TRUST_PROXY_HOPS=1` | 只信任前方一个 Caddy 代理 |
-
-## 管理员
-
-```bash
-read -r -p 'Administrator username or email: ' ADMIN_USERNAME
-read -r -s -p 'Administrator password: ' ADMIN_PASSWORD; printf '\n'
-printf '%s' "$ADMIN_PASSWORD" | docker compose exec -T -e ADMIN_USERNAME="$ADMIN_USERNAME" -e ADMIN_PASSWORD_STDIN=1 app npm run admin:init
-unset ADMIN_PASSWORD
-```
-
-`admin:init` 只允许首次初始化。忘记管理员密码时，只能在服务器本机运行 `docker compose exec -it app npm run admin:reset-password`（输入不回显，旧 Session 失效）；网页不提供管理员密码找回。
-
-## 备份
-
-- **应用内 Full Backup JSON**：在“数据备份”页面导出，包含业务数据，不含账号、密码哈希、Session 和 Audit Log。
-- **服务器 SQLite 备份**：`sudo ./deploy/backup.sh` 使用 SQLite 在线备份 API 在 `app_data/backups/` 生成 0600 权限的一致性副本。它包含业务和认证数据，请加密后保存到服务器以外的位置。
-
-不要直接复制运行中的 SQLite 主文件。严禁执行 `docker compose down -v`、`docker volume prune` 或 `docker system prune`，它们会删除数据卷。
-
-## 更新
-
-```bash
-sudo ./deploy/update.sh <完整 40 位 Git commit SHA>
-```
-
-更新器先在线备份 SQLite，只接受 fast-forward，构建独立候选镜像，在数据库副本上验证迁移和健康检查后才切换；失败时恢复旧镜像、旧代码和更新前备份。按版本号升级的管理命令将随一键安装程序提供。
+| `TRUST_PROXY_HOPS=1` | 只信任前方一个反向代理 |
 
 ## 开发与测试
 
@@ -114,7 +124,8 @@ npm run test:all
 ```text
 css/ js/             前端界面、共享计算核心、PDF 生成与服务器 API 适配层
 server/              认证、API、SQLite 与运维脚本
-deploy/              Caddy、安装、更新和备份脚本
+installer/           一键安装程序、管理命令与 Compose 配置
+deploy/              源码部署使用的 Caddyfile
 tests/               业务、PDF、安全、多用户和部署测试
 Dockerfile           非 root 生产镜像
 docker-compose.yml   App、Caddy、网络和持久卷

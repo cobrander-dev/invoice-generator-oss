@@ -6,14 +6,14 @@
 
 使用支持当前依赖的Node.js（>=22.16；本轮测试使用26.2.0）。在项目根目录运行 `npm ci`。
 
-1. 新建仅供本地TEST使用的`.env`：设置`NODE_ENV=development`、`HOST=127.0.0.1`、`PORT=3000`、`APP_ORIGIN=http://127.0.0.1:3000`和`DATABASE_PATH=./data/foreign-trade.sqlite`；不要直接沿用Production模板值。
+1. 新建仅供本地TEST使用的`.env`：设置`NODE_ENV=development`、`HOST=127.0.0.1`、`PORT=3000`、`APP_ORIGIN=http://127.0.0.1:3000`和`DATABASE_PATH=./data/invoice-generator.sqlite`；不要直接沿用Production模板值。
 2. 使用 `openssl rand -hex 32` 生成独立随机 `SESSION_SECRET`，填入 `.env`，并执行`chmod 600 .env`；不要分享或提交。
 3. 以临时环境变量或标准输入提供测试管理员用户名和符合`PASSWORD_MIN_LENGTH`（默认8）的非弱密码，执行`npm run admin:init`。不要将管理员密码长期写进`.env`。
 4. 运行 `npm run start:server`，在隔离浏览器打开 `http://127.0.0.1:3000/`。
 
 服务器读取环境变量或根目录 `.env`，不自动生成凭据；缺失/占位Session Secret会拒绝启动。`PORT`与`APP_ORIGIN`需一起修改，浏览器固定使用配置的域名/IP和端口。localhost与127.0.0.1是不同Origin，不混用。
 
-默认开发数据库为`data/foreign-trade.sqlite`。Production必须显式设置`DATABASE_PATH`；Docker固定使用`/app/data/foreign-trade.sqlite`。业务表包括`company`、`customers`、`products`、`orders`、`packing_lists`、`meta`、`restore_points`和服务器编号表`document_sequences`；认证/安全表包括`users`、`user_login_identifiers`、`sessions`、`audit_logs`、`schema_migrations`。`AUTH_DB_PATH`仅作为旧测试配置兼容别名。数据库目录0700、主文件0600；启动脚本使用umask 0077。不要把数据库放入任何公开静态目录。
+默认开发数据库为`data/invoice-generator.sqlite`。Production必须显式设置`DATABASE_PATH`；Docker固定使用`/app/data/invoice-generator.sqlite`。业务表包括`company`、`customers`、`products`、`orders`、`packing_lists`、`meta`、`restore_points`和服务器编号表`document_sequences`；认证/安全表包括`users`、`user_login_identifiers`、`sessions`、`audit_logs`、`schema_migrations`。`AUTH_DB_PATH`仅作为旧测试配置兼容别名。数据库目录0700、主文件0600；启动脚本使用umask 0077。不要把数据库放入任何公开静态目录。
 
 `schema_migrations`只管理服务器DDL；启动不创建管理员、不修改管理员密码、不导入IndexedDB，也不写入Demo或重写业务JSON。多人Migration把唯一旧用户升级为唯一ADMIN，并把旧业务Owner归给该ADMIN；安全边界变化会使升级前Session失效，升级后需重新登录。业务数据和密码哈希保持不变。
 
