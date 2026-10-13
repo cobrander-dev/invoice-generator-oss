@@ -1,0 +1,8 @@
+[Unit]
+Description=Invoice Generator automatic database backup
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/invoice-generator backup --auto

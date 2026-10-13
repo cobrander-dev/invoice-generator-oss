@@ -9,12 +9,10 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24.20.0
@@ -35,35 +33,97 @@ jobs:
       - run: npm run test:server:host-caddy
       - run: npm run test:server:multi-user
       - run: npm run test:server:security
+      - run: npm run test:server:installer
       - name: Prepare isolated TEST container environment
         run: |
-          printf 'NODE_ENV=test\nHOST=0.0.0.0\nPORT=3000\nDOMAIN=invoice.example.com\nAPP_ORIGIN=http://localhost:18080\nDATABASE_PATH=/app/data/foreign-trade.sqlite\nBUSINESS_BACKUP_LIMIT=64mb\nSESSION_SECRET=%s\nTRUST_PROXY_HOPS=1\n' "$(openssl rand -hex 48)" > .env
+          printf 'NODE_ENV=test\nHOST=0.0.0.0\nPORT=3000\nDOMAIN=invoice.example.com\nAPP_ORIGIN=http://localhost:18080\nDATABASE_PATH=/app/data/invoice-generator.sqlite\nBUSINESS_BACKUP_LIMIT=64mb\nSESSION_SECRET=%s\nTRUST_PROXY_HOPS=1\n' "$(openssl rand -hex 48)" > .env
           chmod 600 .env
       - name: Validate Compose configuration
         run: |
           docker compose config --quiet
           docker compose -f docker-compose.yml -f docker-compose.host-caddy.yml config --quiet
           docker compose -f docker-compose.yml -f tests/deploy/docker-compose.test.yml config --quiet
-      - run: docker build -t foreign-trade-invoice-generator:test .
+      - run: docker build -t invoice-generator:test .
       - name: Verify PDF dependencies and regression in Production image
         run: |
-          versions="$(docker run --rm --entrypoint node foreign-trade-invoice-generator:test -e "console.log(require('/app/node_modules/jspdf/package.json').version + ' ' + require('/app/node_modules/jspdf-autotable/package.json').version)")"
+          versions="$(docker run --rm --entrypoint node invoice-generator:test -e "console.log(require('/app/node_modules/jspdf/package.json').version + ' ' + require('/app/node_modules/jspdf-autotable/package.json').version)")"
           test "$versions" = "4.2.1 5.0.8"
           docker run --rm --entrypoint node \
             -v "$GITHUB_WORKSPACE/tests:/app/tests:ro" \
-            foreign-trade-invoice-generator:test \
+            invoice-generator:test \
             /app/tests/pdf-dependency-regression.js /tmp/phase6-pdfs
       - name: Isolated container persistence smoke test
         run: tests/deploy/container-smoke.sh
-      - name: Phase 7 real updater fault-injection test
-        run: tests/deploy/phase7-update-smoke.sh
       - name: Prepare Existing Host Caddy TEST environment
         run: |
-          printf 'NODE_ENV=test\nHOST=0.0.0.0\nPORT=3000\nDOMAIN=invoice.example.com\nAPP_ORIGIN=http://127.0.0.1:3001\nDEPLOYMENT_MODE=EXISTING_HOST_CADDY\nDATABASE_PATH=/app/data/foreign-trade.sqlite\nBUSINESS_BACKUP_LIMIT=64mb\nSESSION_SECRET=%s\nTRUST_PROXY_HOPS=1\n' "$(openssl rand -hex 48)" > .env
+          printf 'NODE_ENV=test\nHOST=0.0.0.0\nPORT=3000\nDOMAIN=invoice.example.com\nAPP_ORIGIN=http://127.0.0.1:3001\nDEPLOYMENT_MODE=EXISTING_HOST_CADDY\nDATABASE_PATH=/app/data/invoice-generator.sqlite\nBUSINESS_BACKUP_LIMIT=64mb\nSESSION_SECRET=%s\nTRUST_PROXY_HOPS=1\n' "$(openssl rand -hex 48)" > .env
           chmod 600 .env
       - name: Existing Host Caddy real app-only workflow
         run: tests/deploy/host-caddy-container-smoke.sh
       - name: Production enterprise multi-user app-only workflow
         run: tests/deploy/multi-user-container-smoke.sh
-      - name: Production schema v3 to v4 updater migration and rollback
-        run: tests/deploy/multi-user-update-smoke.sh
+
+  installer-static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: ShellCheck installer and test scripts
+        run: |
+          shellcheck -x -S warning installer/install.sh installer/bundle/setup.sh installer/bundle/invoice-generator \
+            installer/bundle/lib/*.sh scripts/build-installer-bundle.sh tests/installer/e2e.sh
+      - name: Validate production Caddyfiles with the pinned Caddy image
+        run: |
+          . installer/bundle/lib/common.sh
+          . installer/bundle/lib/https.sh
+          mkdir -p "$RUNNER_TEMP/caddy"
+          render_caddyfile domain invoice.example.com > "$RUNNER_TEMP/caddy/domain"
+          render_caddyfile ip 203.0.113.10 > "$RUNNER_TEMP/caddy/ip"
+          for kind in domain ip; do
+            docker run --rm -v "$RUNNER_TEMP/caddy/$kind:/etc/caddy/Caddyfile:ro" caddy:2.11.4-alpine \
+              caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          done
+
+  installer-docker-setup:
+    # The bootstrap installs Docker from Docker's repository on a clean system. The containers
+    # have no Docker daemon, so the run must stop exactly at DOCKER_DAEMON_UNAVAILABLE.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ['ubuntu:24.04', 'ubuntu:22.04', 'debian:12']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Build a test bundle
+        run: IG_ALLOW_LOCAL_IMAGES=1 scripts/build-installer-bundle.sh v0.0.1-ci.1 invoice-generator:ci caddy:2.11.4-alpine "$RUNNER_TEMP/dist"
+      - name: Install Docker on a clean ${{ matrix.os }}
+        run: |
+          docker run --rm -e IG_NONINTERACTIVE=1 -v "$RUNNER_TEMP/dist:/dist:ro" "${{ matrix.os }}" bash -c '
+            set -u
+            output="$(bash /dist/install.sh 2>&1)"; status=$?
+            printf "%s\n" "$output" | tail -n 20
+            test "$status" -ne 0
+            printf "%s" "$output" | grep -q "DOCKER_DAEMON_UNAVAILABLE"
+            test -s /etc/apt/keyrings/docker.asc
+            docker --version
+            docker compose version'
+
+  installer-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [domain, ip, external]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Installer end-to-end (${{ matrix.mode }})
+        run: sudo -E tests/installer/e2e.sh ${{ matrix.mode }}
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          sudo docker ps -a
+          sudo ls -la /opt/invoice-generator /opt/invoice-generator/backups || true
+          sudo invoice-generator logs app || true
+          sudo invoice-generator logs caddy || true

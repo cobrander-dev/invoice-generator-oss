@@ -31,7 +31,8 @@
     "lint": "eslint .",
     "format": "prettier --write \"**/*.js\"",
     "format:check": "prettier --check \"**/*.js\"",
-    "test:server:security": "node --test tests/server/frontend-output-encoding.test.js tests/server/input-policy.test.js"
+    "test:server:security": "node --test tests/server/frontend-output-encoding.test.js tests/server/input-policy.test.js",
+    "test:server:installer": "node --test tests/server/installer.test.js"
   },
   "dependencies": {
     "argon2": "0.45.1",

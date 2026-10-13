@@ -6,8 +6,6 @@ const { before, after, beforeEach } = test;
 const C = require('../../js/core.js');
 const { fixture } = require('./helpers');
 const { ConflictError, ValidationError } = require('../../server/db/errors');
-const fs = require('node:fs');
-const path = require('node:path');
 const { readSource } = require('../source-text');
 
 let f;

@@ -61,11 +61,11 @@ ensure_host_caddy_site() {
   cp -a -- "$caddy_file" "$backup_file"
   cp -a -- "$caddy_file" "$temporary_file"
   {
-    printf '\n# BEGIN Foreign-Trade-Invoice-Generator\n'
+    printf '\n# BEGIN Invoice Generator\n'
     printf '%s {\n' "$domain"
     printf '    reverse_proxy %s\n' "$upstream"
     printf '}\n'
-    printf '# END Foreign-Trade-Invoice-Generator\n'
+    printf '# END Invoice Generator\n'
   } >> "$temporary_file"
 
   if ! validate_host_caddy_file "$temporary_file"; then

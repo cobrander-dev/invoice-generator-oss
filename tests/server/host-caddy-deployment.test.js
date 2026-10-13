@@ -10,10 +10,7 @@ const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const composeOverride = read('docker-compose.host-caddy.yml');
-const install = read('deploy/install.sh');
-const update = read('deploy/update.sh');
-const helper = read('deploy/lib/host-caddy.sh');
-const envExample = read('.env.example');
+const helper = read('installer/bundle/lib/host-caddy.sh');
 
 function makeHarness() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-host-caddy-'));
@@ -46,7 +43,7 @@ function makeHarness() {
     systemctlLog,
     env,
     run(command, extraEnv = {}) {
-      return spawnSync('bash', ['-c', `. deploy/lib/host-caddy.sh; ${command}`], {
+      return spawnSync('bash', ['-c', `. installer/bundle/lib/host-caddy.sh; ${command}`], {
         cwd: root,
         env: { ...env, ...extraEnv },
         encoding: 'utf8',
@@ -87,20 +84,6 @@ test('Host Caddy Compose override exposes only loopback 127.0.0.1:3001 and prese
     'read_only: true',
   ])
     assert.match(base, new RegExp(control.replace('/', '\\/')));
-});
-
-test('Installer selects host mode, starts only app and checks loopback health', () => {
-  assert.match(install, /deployment_mode='EXISTING_HOST_CADDY'/);
-  assert.match(install, /DEPLOYMENT_MODE=%s/);
-  assert.match(install, /compose up -d app\nelse\n  compose up -d app caddy/);
-  assert.match(install, /http:\/\/127\.0\.0\.1:3001\/health/);
-  assert.match(install, /ensure_host_caddy_site \/etc\/caddy\/Caddyfile/);
-  assert.match(install, /Domain \(for example invoice\.example\.com\)/);
-  assert.match(install, /DOMAIN=%s\\nAPP_ORIGIN=https:\/\/%s/);
-  assert.match(install, /env_value DOMAIN/);
-  assert.match(envExample, /DOMAIN=invoice\.example\.com/);
-  assert.match(envExample, /APP_ORIGIN=https:\/\/invoice\.example\.com/);
-  assert.match(envExample, /DEPLOYMENT_MODE=BUNDLED_CADDY/);
 });
 
 test('Host Caddy site installation preserves existing site and adds invoice site exactly once', () => {
@@ -181,19 +164,6 @@ test('Successful host Caddy change uses reload and never restart', () => {
   } finally {
     h.cleanup();
   }
-});
-
-test('Updater host mode updates only app and never edits or reloads host Caddy', () => {
-  assert.match(update, /valid_domain "\$\(env_value DOMAIN\)"/);
-  assert.match(update, /APP_ORIGIN[^\n]*https:\/\/\$\(env_value DOMAIN\)/);
-  assert.doesNotMatch(update, /read[^\n]*Domain/);
-  assert.match(update, /updater will not modify or restart host Caddy/);
-  assert.doesNotMatch(update, /ensure_host_caddy_site|systemctl (?:reload|restart) caddy/);
-  assert.match(
-    update,
-    /if \[\[ "\$deployment_mode" == 'BUNDLED_CADDY' \]\]; then[\s\S]*compose stop caddy/,
-  );
-  assert.match(update, /APP_IMAGE_TAG=current compose up -d --no-build app/);
 });
 
 test('Host Caddy helper rejects domain injection before changing the Caddyfile', () => {

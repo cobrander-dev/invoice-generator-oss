@@ -1,0 +1,423 @@
+#!/usr/bin/env bash
+# Invoice Generator 管理命令。安装后位于 /usr/local/bin/invoice-generator。
+set -Eeuo pipefail
+umask 077
+
+BUNDLE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# shellcheck source=lib/common.sh
+. "$BUNDLE_DIR/lib/common.sh"
+# shellcheck source=lib/https.sh
+. "$BUNDLE_DIR/lib/https.sh"
+
+usage() {
+  cat <<'EOF'
+用法：sudo invoice-generator [命令]
+
+  （无参数）            打开中文管理菜单
+  status                运行状态
+  doctor                只读健康检查
+  backup                立即备份数据库
+  backups               列出备份
+  restore <备份文件>    从备份恢复（恢复前自动再备份一次当前数据）
+  upgrade [版本]        升级到最新或指定版本（先备份并验证，失败自动回滚）
+  logs [app|caddy] [-f] 查看日志
+  https                 查看 HTTPS 证书信息
+  reset-admin-password  重置管理员密码
+  version               显示版本
+EOF
+}
+
+ok() { printf '  [正常] %s\n' "$*"; }
+bad() {
+  printf '  [异常] %s\n' "$*"
+  IG_DOCTOR_FAILED=1
+}
+attention() { printf '  [注意] %s\n' "$*"; }
+
+cmd_version() {
+  load_release "$IG_CURRENT"
+  say "Invoice Generator $IG_VERSION"
+}
+
+cmd_status() {
+  load_settings
+  load_release "$IG_CURRENT"
+  say "版本：$IG_VERSION"
+  say "访问地址：https://$IG_ACCESS_HOST"
+  if [[ "$IG_PROXY_MODE" == bundled ]]; then
+    say 'HTTPS：内置 Caddy'
+  else
+    say "HTTPS：已有反向代理 → 127.0.0.1:$IG_APP_PORT"
+  fi
+  compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+  local age
+  if age="$(backup_age_hours)"; then say "最近备份：${age} 小时前"; else say '最近备份：无'; fi
+}
+
+cmd_doctor() {
+  IG_DOCTOR_FAILED=0
+  load_settings
+  load_release "$IG_CURRENT"
+  say "Invoice Generator $IG_VERSION 健康检查"
+  local file mode
+  for file in "$IG_APP_ENV" "$IG_INSTALLER_ENV"; do
+    mode="$(stat -c '%a' "$file" 2>/dev/null || true)"
+    [[ "$mode" == 600 ]] && ok "配置文件权限 0600：$file" || bad "配置文件权限应为 0600：$file（当前 ${mode:-缺失}）"
+  done
+  docker image inspect "$IG_APP_IMAGE" >/dev/null 2>&1 && ok '应用镜像已就绪' || bad "缺少应用镜像 $IG_APP_IMAGE"
+  app_healthy && ok '应用容器运行正常' || bad '应用容器未运行或健康检查失败'
+  if [[ "$IG_PROXY_MODE" == bundled ]]; then
+    [[ "$(docker inspect --format '{{.State.Status}}' "$(compose ps -q caddy 2>/dev/null)" 2>/dev/null)" == running ]] &&
+      ok 'HTTPS 代理运行中' || bad 'HTTPS 代理未运行'
+  fi
+  entry_healthy && ok '访问入口可用' || bad '访问入口检查失败'
+  local free
+  free="$(df -Pk "$IG_ROOT" | awk 'NR==2 {print int($4/1024)}')"
+  ((free >= 2048)) && ok "磁盘剩余 ${free} MB" || bad "磁盘剩余空间不足：${free} MB"
+  if [[ -f /etc/systemd/system/invoice-generator-backup.timer ]]; then
+    systemctl is-active --quiet invoice-generator-backup.timer && ok '自动备份定时器已启用' || bad '自动备份定时器未运行'
+  elif [[ -f /etc/cron.d/invoice-generator-backup ]]; then
+    ok '自动备份 cron 已配置'
+  else
+    bad '未配置自动备份'
+  fi
+  local age
+  if age="$(backup_age_hours)"; then
+    ((age <= 36)) && ok "最近备份：${age} 小时前" || attention "最近备份已超过 ${age} 小时"
+  else
+    attention '尚无备份'
+  fi
+  [[ "$IG_DOCTOR_FAILED" -eq 0 ]] || return 1
+}
+
+cmd_backup() {
+  local kind=manual path
+  [[ "${1:-}" == --auto ]] && kind=auto
+  with_lock
+  load_settings
+  path="$(create_backup "$kind" | tail -n 1)"
+  say "备份完成：$path"
+}
+
+cmd_backups() {
+  load_settings
+  local name size
+  say "备份目录：$IG_BACKUP_DIR"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    size="$(du -h "$IG_BACKUP_DIR/$name" | cut -f1)"
+    printf '  %s  %s\n' "$name" "$size"
+  done < <(backup_files)
+}
+
+confirm_phrase() {
+  local phrase="$1" message="$2" answer
+  [[ "${IG_ASSUME_YES:-0}" == 1 ]] && return 0
+  [[ -r /dev/tty ]] || die CONFIRMATION_REQUIRED '需要交互式确认，或使用 --yes。'
+  printf '%s\n请输入 %s 确认：' "$message" "$phrase" >/dev/tty
+  IFS= read -r answer </dev/tty || answer=''
+  [[ "$answer" == "$phrase" ]] || die CANCELLED '已取消，没有做任何更改。'
+}
+
+stop_services() {
+  local release_dir="${1:-$IG_CURRENT}"
+  [[ "$IG_PROXY_MODE" == bundled ]] && { quietly compose_in "$release_dir" stop caddy || true; }
+  quietly compose_in "$release_dir" stop app || true
+}
+
+start_services() {
+  local release_dir="${1:-$IG_CURRENT}"
+  quietly compose_in "$release_dir" up -d --remove-orphans app || return 1
+  app_healthy "$release_dir" || return 1
+  if [[ "$IG_PROXY_MODE" == bundled ]]; then
+    quietly compose_in "$release_dir" up -d caddy || return 1
+  fi
+}
+
+cmd_restore() {
+  local archive='' work database summary pre
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --yes) IG_ASSUME_YES=1 ;;
+      *) archive="$1" ;;
+    esac
+    shift
+  done
+  [[ -n "$archive" ]] || die USAGE '用法：invoice-generator restore <备份文件> [--yes]'
+  [[ "$archive" == /* ]] || archive="$(pwd)/$archive"
+  with_lock
+  load_settings
+  load_release "$IG_CURRENT"
+  work="$(mktemp -d)"
+  trap 'rm -rf -- "$work"' EXIT
+  database="$(unpack_backup "$archive" "$work")"
+  local verify_status=0
+  verify_database_file "$IG_APP_IMAGE" "$database" || verify_status=$?
+  if [[ "$verify_status" -eq 2 ]]; then
+    die BACKUP_SCHEMA_TOO_NEW "该备份来自更新版本，当前版本无法恢复：$IG_VERIFY_RESULT"
+  elif [[ "$verify_status" -ne 0 ]]; then
+    die BACKUP_INVALID "备份文件无效：$IG_VERIFY_RESULT"
+  fi
+  summary="$IG_VERIFY_RESULT"
+  say "备份内容：$summary"
+  confirm_phrase RESTORE '恢复会用该备份替换当前全部数据（包括账号）。恢复前会自动备份当前数据。'
+  pre="$(create_backup pre-restore | tail -n 1)"
+  say "已备份当前数据：$pre"
+  stop_services
+  if replace_database "$IG_APP_IMAGE" "$database" && start_services && entry_healthy; then
+    say '恢复完成，所有用户需要重新登录。'
+    return 0
+  fi
+  warn '恢复后应用未能正常启动，正在还原恢复前的数据...'
+  stop_services
+  database="$(unpack_backup "$pre" "$work")"
+  replace_database "$IG_APP_IMAGE" "$database" && start_services ||
+    die RESTORE_ROLLBACK_FAILED "还原失败，请联系管理员。恢复前备份：$pre"
+  die RESTORE_FAILED "恢复失败，已还原到恢复前的数据（$pre）。"
+}
+
+# Fetches and verifies a release bundle; prints the extracted bundle directory.
+fetch_bundle() {
+  local target="$1" work="$2" bundle_file="$3" bundle_sha="$4" repository base
+  if [[ -n "$bundle_file" ]]; then
+    [[ "$bundle_sha" =~ ^[0-9a-f]{64}$ ]] || die USAGE '--bundle 需要同时提供 --sha256 <64位十六进制>。'
+    cp -- "$bundle_file" "$work/bundle.tar.gz"
+  else
+    repository="$(env_get "$IG_CURRENT/release.env" REPOSITORY)"
+    if [[ -n "$target" ]]; then
+      [[ "$target" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] || die USAGE "版本号无效：$target"
+      base="https://github.com/$repository/releases/download/$target"
+    else
+      base="https://github.com/$repository/releases/latest/download"
+    fi
+    curl -fsSL --proto '=https' --tlsv1.2 "$base/invoice-generator-installer.tar.gz" -o "$work/bundle.tar.gz" &&
+      curl -fsSL --proto '=https' --tlsv1.2 "$base/SHA256SUMS" -o "$work/SHA256SUMS" ||
+      die RELEASE_DOWNLOAD_FAILED '下载升级包失败，请检查网络或 GitHub 访问。'
+    bundle_sha="$(awk '$2 == "invoice-generator-installer.tar.gz" || $2 == "*invoice-generator-installer.tar.gz" {print $1}' "$work/SHA256SUMS")"
+  fi
+  [[ "$(sha256sum "$work/bundle.tar.gz" | awk '{print $1}')" == "$bundle_sha" ]] ||
+    die RELEASE_CHECKSUM_MISMATCH '升级包校验失败，已停止。'
+  mkdir "$work/bundle"
+  tar -xzf "$work/bundle.tar.gz" -C "$work/bundle" --no-same-owner
+  (cd "$work/bundle" && sha256sum --check --strict --quiet MANIFEST.sha256) ||
+    die RELEASE_CHECKSUM_MISMATCH '升级包内容校验失败，已停止。'
+  printf '%s\n' "$work/bundle"
+}
+
+# Starts the new image on a copy of the latest backup in an isolated, network-less volume.
+candidate_check() {
+  local image="$1" archive="$2" work="$3" volume container database status=1
+  volume="invoice-generator-candidate-$$"
+  container="invoice-generator-candidate-$$"
+  database="$(unpack_backup "$archive" "$work")"
+  docker volume create --label invoice-generator.candidate=1 "$volume" >/dev/null
+  docker run --rm --network none --user 0 --entrypoint sh -v "$volume:/app/data" -v "$work:/seed:ro" "$image" -c \
+    "set -eu; cp /seed/restore.sqlite '$IG_DATABASE_PATH'; chown -R node:node /app/data; chmod 600 '$IG_DATABASE_PATH'" &&
+    docker run -d --name "$container" --network none --env-file "$IG_APP_ENV" \
+      -e NODE_ENV=production -e HOST=0.0.0.0 -e PORT=3000 -e TRUST_PROXY_HOPS=1 \
+      -e DATABASE_PATH="$IG_DATABASE_PATH" -e SESSION_SECRET="$(openssl rand -hex 48)" \
+      --health-cmd "node -e \"require('node:http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\"" \
+      --health-interval 2s --health-timeout 2s --health-retries 30 --health-start-period 5s \
+      -v "$volume:/app/data" "$image" >/dev/null &&
+    container_healthy "$container" && status=0
+  docker rm -f "$container" >/dev/null 2>&1 || true
+  docker volume rm "$volume" >/dev/null 2>&1 || true
+  rm -f -- "$database"
+  return "$status"
+}
+
+cmd_upgrade() {
+  local target='' bundle_file='' bundle_sha='' work bundle old_dir old_version new_version new_dir
+  local old_app_image pre final database
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --bundle) bundle_file="$2"; shift ;;
+      --sha256) bundle_sha="$2"; shift ;;
+      --yes) IG_ASSUME_YES=1 ;;
+      *) target="$1" ;;
+    esac
+    shift
+  done
+  with_lock
+  load_settings
+  old_dir="$(readlink -f "$IG_CURRENT")"
+  load_release "$old_dir"
+  old_version="$IG_VERSION"
+  old_app_image="$IG_APP_IMAGE"
+  work="$(mktemp -d)"
+  trap 'rm -rf -- "$work"' EXIT
+  bundle="$(fetch_bundle "$target" "$work" "$bundle_file" "$bundle_sha")"
+  load_release "$bundle"
+  new_version="$IG_VERSION"
+  if [[ "$new_version" == "$old_version" ]]; then
+    say "已是最新版本 $old_version。"
+    return 0
+  fi
+  [[ "$(printf '%s\n%s\n' "$old_version" "$new_version" | sort -V | tail -n 1)" == "$new_version" ]] ||
+    die DOWNGRADE_REFUSED "不支持降级：当前 $old_version，目标 $new_version。"
+  say "升级：$old_version → $new_version"
+  confirm_phrase UPGRADE '升级前会自动备份并在隔离环境中验证新版本。'
+  app_healthy "$old_dir" || die APP_UNHEALTHY '当前应用不健康，请先运行 invoice-generator doctor 处理后再升级。'
+
+  new_dir="$IG_RELEASES_DIR/$new_version"
+  rm -rf -- "$new_dir.staging"
+  cp -a "$bundle" "$new_dir.staging"
+  chmod 755 "$new_dir.staging"
+  rm -rf -- "$new_dir"
+  mv -- "$new_dir.staging" "$new_dir"
+  load_release "$new_dir"
+  ensure_image "$IG_APP_IMAGE"
+  [[ "$IG_PROXY_MODE" == bundled ]] && ensure_image "$IG_CADDY_IMAGE"
+
+  say '1/4 备份当前数据...'
+  pre="$(create_backup pre-upgrade "$old_dir" | tail -n 1)"
+  note "$pre"
+  say '2/4 在隔离环境中验证新版本与数据迁移...'
+  load_release "$new_dir"
+  candidate_check "$IG_APP_IMAGE" "$pre" "$work" ||
+    die CANDIDATE_FAILED "新版本 $new_version 未通过验证，当前版本未做任何更改。"
+
+  say '3/4 停止服务并创建最终备份...'
+  stop_services "$old_dir"
+  final="$(create_backup final-pre-upgrade "$old_dir" | tail -n 1)" || {
+    start_services "$old_dir" || true
+    die BACKUP_FAILED '最终备份失败，已恢复原服务，未做任何更改。'
+  }
+
+  say '4/4 切换到新版本...'
+  ln -sfn "$new_dir" "$IG_CURRENT.new"
+  mv -Tf -- "$IG_CURRENT.new" "$IG_CURRENT"
+  if start_services "$new_dir" && entry_healthy; then
+    set_env_value "$IG_INSTALLER_ENV" INSTALLED_VERSION "$new_version"
+    refresh_schedule
+    prune_releases
+    say "升级完成：$new_version。升级前备份：$final"
+    return 0
+  fi
+
+  warn '新版本启动失败，正在回滚到原版本和升级前数据...'
+  stop_services "$new_dir"
+  ln -sfn "$old_dir" "$IG_CURRENT.new"
+  mv -Tf -- "$IG_CURRENT.new" "$IG_CURRENT"
+  database="$(unpack_backup "$final" "$work")"
+  if replace_database "$old_app_image" "$database" && start_services "$old_dir"; then
+    die UPGRADE_ROLLED_BACK "升级失败，已回滚到 $old_version 并恢复升级前数据（$final）。"
+  fi
+  die UPGRADE_ROLLBACK_FAILED "升级失败且回滚未完成，请勿删除任何数据。升级前备份：$final"
+}
+
+refresh_schedule() {
+  if [[ -f /etc/systemd/system/invoice-generator-backup.timer ]]; then
+    install -m 0644 "$IG_CURRENT/systemd/invoice-generator-backup.service" /etc/systemd/system/
+    install -m 0644 "$IG_CURRENT/systemd/invoice-generator-backup.timer" /etc/systemd/system/
+    systemctl daemon-reload || true
+  fi
+}
+
+# Keeps the current release and the two most recent others for manual rollback.
+prune_releases() {
+  local current name kept=0
+  current="$(basename -- "$(readlink -f "$IG_CURRENT")")"
+  while IFS= read -r name; do
+    [[ "$name" == "$current" ]] && continue
+    kept=$((kept + 1))
+    ((kept <= 2)) && continue
+    rm -rf -- "${IG_RELEASES_DIR:?}/$name"
+  done < <(find "$IG_RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -not -name '.*' -printf '%f\n' | sort -rV)
+}
+
+cmd_logs() {
+  local service=app follow=()
+  for arg in "$@"; do
+    case "$arg" in
+      app | caddy) service="$arg" ;;
+      -f) follow=(-f) ;;
+    esac
+  done
+  load_settings
+  compose logs --tail 200 "${follow[@]}" "$service"
+}
+
+cmd_https() {
+  load_settings
+  say "访问地址：https://$IG_ACCESS_HOST"
+  if [[ "$IG_PROXY_MODE" == external ]]; then
+    say "HTTPS 由现有反向代理提供，应用监听 127.0.0.1:$IG_APP_PORT。示例配置：$IG_PROXY_DIR"
+    return 0
+  fi
+  local certificate
+  certificate="$(openssl s_client -connect 127.0.0.1:443 -servername "$IG_ACCESS_HOST" </dev/null 2>/dev/null |
+    openssl x509 -noout -issuer -enddate 2>/dev/null || true)"
+  if [[ -z "$certificate" ]]; then
+    say '暂未获取到证书，可能仍在申请中。'
+    return 1
+  fi
+  say "$certificate"
+  if [[ "$certificate" == *'Caddy Local Authority'* ]]; then
+    local root
+    if root="$(export_local_ca)"; then
+      say ''
+      say "当前使用本机 CA 证书。根证书已导出：$root"
+      say "SHA-256 指纹：$(openssl x509 -in "$root" -noout -fingerprint -sha256 | cut -d= -f2)"
+      say '把该根证书导入电脑的“受信任的根证书”后即可安全访问；请先核对指纹。'
+    fi
+  fi
+}
+
+cmd_reset_admin_password() {
+  load_settings
+  [[ -t 0 ]] || die TTY_REQUIRED '需要交互式终端。'
+  compose exec app node server/scripts/reset-admin-password.js
+}
+
+menu() {
+  local choice
+  while true; do
+    say ''
+    say '==== Invoice Generator 管理菜单 ===='
+    say ' 1) 运行状态        2) 健康检查'
+    say ' 3) 立即备份        4) 查看备份'
+    say ' 5) 从备份恢复      6) 升级到最新版本'
+    say ' 7) 查看日志        8) HTTPS 证书信息'
+    say ' 9) 重置管理员密码  0) 退出'
+    IFS= read -r -p '请选择: ' choice || return 0
+    case "$choice" in
+      1) cmd_status || true ;;
+      2) cmd_doctor || true ;;
+      3) (cmd_backup) || true ;;
+      4) cmd_backups || true ;;
+      5) read -r -p '备份文件路径: ' choice && (cmd_restore "$choice") || true ;;
+      6) (cmd_upgrade) || true ;;
+      7) cmd_logs app || true ;;
+      8) cmd_https || true ;;
+      9) cmd_reset_admin_password || true ;;
+      0 | q) return 0 ;;
+    esac
+  done
+}
+
+main() {
+  require_root
+  local command="${1:-menu}"
+  [[ $# -gt 0 ]] && shift
+  case "$command" in
+    menu) menu ;;
+    status) cmd_status ;;
+    doctor) cmd_doctor ;;
+    backup) cmd_backup "$@" ;;
+    backups) cmd_backups ;;
+    restore) cmd_restore "$@" ;;
+    upgrade | update) cmd_upgrade "$@" ;;
+    logs) cmd_logs "$@" ;;
+    https) cmd_https ;;
+    reset-admin-password) cmd_reset_admin_password ;;
+    version | --version) cmd_version ;;
+    help | -h | --help) usage ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

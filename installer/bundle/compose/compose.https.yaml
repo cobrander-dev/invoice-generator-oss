@@ -1,0 +1,40 @@
+# Bundled HTTPS entry point: Caddy owns ports 80/443 and proxies to the app.
+services:
+  caddy:
+    image: ${IG_CADDY_IMAGE:?IG_CADDY_IMAGE is required}
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ${IG_CONFIG_DIR:?IG_CONFIG_DIR is required}/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+      - backend
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+networks:
+  edge: {}
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}

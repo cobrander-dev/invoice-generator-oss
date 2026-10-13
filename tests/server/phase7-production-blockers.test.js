@@ -3,7 +3,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const C = require('../../js/core.js');
@@ -13,8 +12,6 @@ const { issueLoginToken, verifyLoginToken, LOGIN_TOKEN_TTL_MS } = require('../..
 
 const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
-const update = read('deploy/update.sh');
-const install = read('deploy/install.sh');
 const limitations = read('KNOWN_LIMITATIONS.md');
 const clone = (value) => JSON.parse(JSON.stringify(value));
 let f;
@@ -402,7 +399,10 @@ test('Phase 7: logout destroys the authenticated session', async () => {
 function passwordCheck(password, minimum = '8') {
   return spawnSync(
     'bash',
-    ['-c', '. deploy/lib/environment.sh; valid_admin_password "$TEST_PASSWORD" "$TEST_MINIMUM"'],
+    [
+      '-c',
+      '. installer/bundle/lib/validate.sh; valid_admin_password "$TEST_PASSWORD" "$TEST_MINIMUM"',
+    ],
     {
       cwd: root,
       env: { ...process.env, TEST_PASSWORD: password, TEST_MINIMUM: minimum },
@@ -424,173 +424,10 @@ test('Phase 7: installer accepts 1024 characters and rejects 1025', () => {
 });
 test('Phase 7: installer rejects placeholder passwords consistently with server rules', () =>
   assert.notEqual(passwordCheck('TEST-change-me-password').status, 0));
-test('Phase 7: existing env content and SESSION_SECRET survive permission tightening', () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-phase7-env-')),
-    envFile = path.join(directory, '.env');
-  const content = 'NODE_ENV=production\nSESSION_SECRET=TEST-secret-preserve-000000000000000000\n';
-  fs.writeFileSync(envFile, content, { mode: 0o644 });
-  const result = spawnSync(
-    'bash',
-    ['-c', '. deploy/lib/environment.sh; secure_env_file "$TEST_ENV" "$(id -u)"'],
-    { cwd: root, env: { ...process.env, TEST_ENV: envFile }, encoding: 'utf8' },
-  );
-  try {
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(fs.readFileSync(envFile, 'utf8'), content);
-    assert.match(fs.readFileSync(envFile, 'utf8'), /SESSION_SECRET=TEST-secret-preserve/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-test('Phase 7: existing env mode becomes 0600 and stays 0600 on rerun', () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-phase7-mode-')),
-    envFile = path.join(directory, '.env');
-  fs.writeFileSync(envFile, 'TEST=1\n', { mode: 0o644 });
-  const command = '. deploy/lib/environment.sh; secure_env_file "$TEST_ENV" "$(id -u)"';
-  try {
-    assert.equal(
-      spawnSync('bash', ['-c', command], { cwd: root, env: { ...process.env, TEST_ENV: envFile } })
-        .status,
-      0,
-    );
-    assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
-    assert.equal(
-      spawnSync('bash', ['-c', command], { cwd: root, env: { ...process.env, TEST_ENV: envFile } })
-        .status,
-      0,
-    );
-    assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-test('Phase 7: existing env symlink is rejected instead of chmod-followed', () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-phase7-link-')),
-    target = path.join(directory, 'target'),
-    link = path.join(directory, '.env');
-  fs.writeFileSync(target, 'TEST=1\n', { mode: 0o644 });
-  fs.symlinkSync(target, link);
-  try {
-    const result = spawnSync(
-      'bash',
-      ['-c', '. deploy/lib/environment.sh; secure_env_file "$TEST_ENV" "$(id -u)"'],
-      { cwd: root, env: { ...process.env, TEST_ENV: link } },
-    );
-    assert.notEqual(result.status, 0);
-    assert.equal(fs.statSync(target).mode & 0o777, 0o644);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test('Phase 7: updater requires exactly one full immutable SHA', () =>
-  assert.match(update, /\^\[0-9a-f\]\{40\}\$/));
-test('Phase 7: updater does not deploy mutable origin branch heads', () =>
-  assert.doesNotMatch(update, /merge --ff-only "origin\/\$branch"/));
-test('Phase 7: updater verifies target existence and origin reachability', () => {
-  assert.match(update, /cat-file -e/);
-  assert.match(update, /for-each-ref --contains=.*refs\/remotes\/origin/);
-});
-test('Phase 7: updater rejects non-fast-forward targets', () =>
-  assert.match(update, /merge-base --is-ancestor "\$old_head" "\$target_commit"/));
-test('Phase 7: candidate build uses an exact detached target worktree', () => {
-  assert.match(update, /worktree add --detach "\$candidate_source" "\$target_commit"/);
-  assert.match(update, /docker build --pull -t "\$candidate_image" "\$candidate_source"/);
-});
-test('Phase 7: candidate uses isolated database name and volume', () => {
-  assert.match(update, /DATABASE_PATH=\/app\/data\/candidate\.sqlite/);
-  assert.match(update, /candidate_volume/);
-  assert.match(update, /candidate-source\.sqlite/);
-});
-test('Phase 7: candidate has no network and never mounts Production app_data', () => {
-  const candidateRun = update.slice(
-    update.indexOf('candidate_container="$(docker run'),
-    update.indexOf('unset candidate_secret'),
-  );
-  assert.match(candidateRun, /--network none/);
-  assert.match(candidateRun, /\$candidate_volume:\/app\/data/);
-  assert.doesNotMatch(candidateRun, /app_data:\/app\/data|docker compose up/);
-});
-test('Phase 7: consistent SQLite backups bracket candidate and promotion', () => {
-  assert.ok(update.indexOf('candidate-source-') < update.indexOf('git fetch'));
-  const promotion = update.slice(update.lastIndexOf('promotion_started=true'));
-  assert.ok(
-    promotion.indexOf('stop caddy') <
-      promotion.indexOf('BACKUP_PATH="/app/data/backups/pre-update-'),
-  );
-  assert.ok(
-    promotion.indexOf('BACKUP_PATH="/app/data/backups/pre-update-') < promotion.indexOf('stop app'),
-  );
-  assert.match(update, /npm run db:backup/g);
-});
-test('Phase 7: candidate failure path leaves Production unpromoted', () => {
-  assert.ok(
-    update.indexOf('promotion_started=false') < update.indexOf('trap rollback_production ERR'),
-  );
-  assert.match(
-    update,
-    /candidate preflight failed \(\$reason\); Production code, image and SQLite were not changed/,
-  );
-});
-test('Phase 7: promotion failure restores matching database and old image', () => {
-  assert.match(update, /\$rollback_seed:\/rollback\.sqlite:ro/);
-  assert.match(update, /compose run --rm --no-deps --user node/);
-  assert.doesNotMatch(update, /compose run --rm --no-deps --user 0/);
-  assert.match(update, /chmod 644 "\$rollback_seed"/);
-  assert.match(update, /chmod 600 "\$rollback_seed"/);
-  assert.match(update, /cp '\/rollback\.sqlite'/);
-  assert.match(update, /foreign-trade-invoice-generator:\$rollback_tag/);
-  assert.match(update, /restore_checkout/);
-  const rollback = update.slice(update.indexOf('rollback_production'));
-  assert.ok(rollback.indexOf('restore_checkout') < rollback.indexOf('compose stop caddy'));
-  assert.ok(rollback.indexOf('compose stop caddy') < rollback.indexOf('compose stop app'));
-  assert.match(rollback, /deployment_mode.*BUNDLED_CADDY[\s\S]*compose stop caddy/);
-  assert.match(update, /wait_healthy "\$restored_container"/);
-});
-test('Phase 7: public proxy starts only after application promotion is committed', () => {
-  const promotion = update.slice(update.lastIndexOf('promotion_started=true'));
-  assert.ok(
-    promotion.indexOf('compose up -d --no-build app\n') <
-      promotion.indexOf('wait_healthy "$container_id"'),
-  );
-  assert.ok(promotion.indexOf('production-commit') < promotion.indexOf('promotion_started=false'));
-  assert.ok(
-    promotion.indexOf('promotion_started=false') <
-      promotion.indexOf('compose up -d --no-build caddy'),
-  );
-  assert.match(promotion, /deployment_mode.*BUNDLED_CADDY[\s\S]*compose up -d --no-build caddy/);
-});
-test('Phase 7: updater records the exact running commit outside health output', () => {
-  assert.match(update, /production-commit/);
-  assert.match(update, /printf '%s\\n' '\$target_commit'/);
-});
-test('Phase 7: updater contains no destructive volume or history rewrite commands', () => {
-  for (const forbidden of [
-    /down\s+-v/,
-    /volume prune/,
-    /system prune/,
-    /reset --hard/,
-    /push --force/,
-  ])
-    assert.doesNotMatch(update, forbidden);
-});
 test('Phase 7: old Docker validation limitation wording is removed', () =>
   assert.doesNotMatch(limitations, /Production镜像仍须在Docker能力可用后/));
 test('Phase 7: GitHub Actions validation is documented as completed without claiming VPS certification', () => {
   assert.match(limitations, /GitHub Actions Ubuntu Runner通过/);
   assert.match(limitations, /Production Release Candidate/);
   assert.match(limitations, /真实VPS验收/);
-});
-test('Phase 7: install and update scripts pass static validation', () => {
-  assert.equal(
-    spawnSync(
-      'bash',
-      ['-n', 'deploy/install.sh', 'deploy/update.sh', 'deploy/lib/environment.sh'],
-      { cwd: root },
-    ).status,
-    0,
-  );
-  assert.equal(spawnSync('bash', ['deploy/install.sh', '--check'], { cwd: root }).status, 0);
-  assert.equal(spawnSync('bash', ['deploy/update.sh', '--check'], { cwd: root }).status, 0);
-  assert.match(install, /valid_admin_password/);
 });

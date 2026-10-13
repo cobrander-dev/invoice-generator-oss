@@ -6,7 +6,7 @@ const Database = require('better-sqlite3');
 async function main() {
   process.umask(0o077);
   const source = path.resolve(
-    process.env.DATABASE_PATH || process.env.AUTH_DB_PATH || './data/foreign-trade.sqlite',
+    process.env.DATABASE_PATH || process.env.AUTH_DB_PATH || './data/invoice-generator.sqlite',
   );
   const dataRoot = path.dirname(source);
   const destination = path.resolve(

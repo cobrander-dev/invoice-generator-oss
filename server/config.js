@@ -33,7 +33,7 @@ function loadConfig(env = process.env) {
     origin,
     secret,
     host: env.HOST || '127.0.0.1',
-    databasePath: path.resolve(configuredDatabasePath || './data/foreign-trade.sqlite'),
+    databasePath: path.resolve(configuredDatabasePath || './data/invoice-generator.sqlite'),
     trustProxy,
     cookieName: production ? '__Host-ft.sid' : 'ft.sid',
     idleMs: 30 * 60 * 1000,

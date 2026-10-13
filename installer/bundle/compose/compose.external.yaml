@@ -1,0 +1,11 @@
+# Existing reverse proxy (Nginx, Caddy, ...): publish the app on loopback only.
+services:
+  app:
+    ports:
+      - '127.0.0.1:${IG_APP_PORT:?IG_APP_PORT is required}:3000'
+    networks:
+      - backend
+      - host_access
+
+networks:
+  host_access: {}

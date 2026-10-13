@@ -14,7 +14,7 @@ async function main() {
   delete process.env.ADMIN_PASSWORD_STDIN;
   const db = openDatabase(
     path.resolve(
-      process.env.DATABASE_PATH || process.env.AUTH_DB_PATH || './data/foreign-trade.sqlite',
+      process.env.DATABASE_PATH || process.env.AUTH_DB_PATH || './data/invoice-generator.sqlite',
     ),
   );
   try {

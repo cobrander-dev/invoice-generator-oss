@@ -6,7 +6,7 @@ command -v docker >/dev/null 2>&1 || { printf 'Docker is required.\n' >&2; exit 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-export COMPOSE_PROJECT_NAME="foreign-trade-multi-user-${GITHUB_RUN_ID:-$$}"
+export COMPOSE_PROJECT_NAME="invoice-generator-multi-user-${GITHUB_RUN_ID:-$$}"
 compose=(docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml -f docker-compose.host-caddy.yml)
 base_url='http://127.0.0.1:3001'
 test_secret='TEST-MULTI-USER-SESSION-SECRET-0000000000000000000000000000000000000000'
@@ -14,7 +14,7 @@ test_secret='TEST-MULTI-USER-SESSION-SECRET-000000000000000000000000000000000000
 cleanup() { "${compose[@]}" down >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-printf 'NODE_ENV=production\nHOST=0.0.0.0\nPORT=3000\nDOMAIN=invoice.example.com\nAPP_ORIGIN=https://invoice.example.com\nDEPLOYMENT_MODE=EXISTING_HOST_CADDY\nDATABASE_PATH=/app/data/foreign-trade.sqlite\nBUSINESS_BACKUP_LIMIT=64mb\nPASSWORD_MIN_LENGTH=8\nSESSION_SECRET=%s\nTRUST_PROXY_HOPS=1\n' "$test_secret" > .env
+printf 'NODE_ENV=production\nHOST=0.0.0.0\nPORT=3000\nDOMAIN=invoice.example.com\nAPP_ORIGIN=https://invoice.example.com\nDEPLOYMENT_MODE=EXISTING_HOST_CADDY\nDATABASE_PATH=/app/data/invoice-generator.sqlite\nBUSINESS_BACKUP_LIMIT=64mb\nPASSWORD_MIN_LENGTH=8\nSESSION_SECRET=%s\nTRUST_PROXY_HOPS=1\n' "$test_secret" > .env
 chmod 600 .env
 
 "${compose[@]}" up -d --build app
@@ -37,7 +37,7 @@ if printf '%s' "$reset_output" | grep -Fq "$reset_password"; then
 fi
 "${compose[@]}" exec -T app node <<'NODE'
 const Database = require('better-sqlite3');
-const db = new Database('/app/data/foreign-trade.sqlite', { readonly: true });
+const db = new Database('/app/data/invoice-generator.sqlite', { readonly: true });
 const admin = db.prepare("SELECT id FROM users WHERE role='ADMIN'").get();
 if (db.prepare("SELECT COUNT(*) n FROM sessions WHERE json_extract(payload, '$.userId')=?").get(admin.id).n !== 0) process.exit(1);
 db.close();
@@ -48,7 +48,7 @@ TEST_BASE_URL="$base_url" TEST_REQUEST_ORIGIN='https://invoice.example.com' TEST
 "${compose[@]}" exec -T app node <<'NODE'
 const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');
-const db = new Database('/app/data/foreign-trade.sqlite');
+const db = new Database('/app/data/invoice-generator.sqlite');
 const admin = db.prepare("SELECT * FROM users WHERE role='ADMIN'").get();
 const employee = db.prepare("SELECT * FROM users WHERE role='EMPLOYEE' LIMIT 1").get();
 assert.throws(() => db.prepare("INSERT INTO users(id,username,password_hash,created_at,display_name,role,status,auth_version) VALUES('second-admin','second-admin','x',1,'Second','ADMIN','ACTIVE',1)").run(), /UNIQUE/);

@@ -5,7 +5,7 @@ const { openDatabase } = require('../db/database');
 function main() {
   process.umask(0o077);
   const filename = path.resolve(
-    process.env.DATABASE_PATH || process.env.AUTH_DB_PATH || './data/foreign-trade.sqlite',
+    process.env.DATABASE_PATH || process.env.AUTH_DB_PATH || './data/invoice-generator.sqlite',
   );
   const db = openDatabase(filename);
   try {

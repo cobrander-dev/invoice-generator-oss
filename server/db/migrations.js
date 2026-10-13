@@ -2,6 +2,8 @@
 
 // Explicit versioned DDL. Migrations create schema only: no Demo seed, import,
 // payload normalization, or application-startup rewrite is allowed here.
+const LATEST_SCHEMA_VERSION = 4;
+
 function migrateDatabase(db) {
   db.transaction(() => {
     db.exec(
@@ -9,7 +11,7 @@ function migrateDatabase(db) {
     );
     const latest =
       db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version || 0;
-    if (latest > 4) throw new Error('Unsupported server schema version');
+    if (latest > LATEST_SCHEMA_VERSION) throw new Error('Unsupported server schema version');
     if (latest === 0) {
       db.exec(`
         CREATE TABLE users (
@@ -158,4 +160,4 @@ function migrateDatabase(db) {
     }
   })();
 }
-module.exports = { migrateDatabase, migrateAuthDatabase: migrateDatabase };
+module.exports = { LATEST_SCHEMA_VERSION, migrateDatabase, migrateAuthDatabase: migrateDatabase };

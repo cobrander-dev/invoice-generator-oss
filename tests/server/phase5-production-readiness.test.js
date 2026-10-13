@@ -17,8 +17,6 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const dockerfile = read('Dockerfile');
 const compose = read('docker-compose.yml');
 const caddy = read('deploy/caddy/Caddyfile');
-const install = read('deploy/install.sh');
-const update = read('deploy/update.sh');
 const dockerignore = read('.dockerignore');
 const gitignore = read('.gitignore');
 
@@ -46,7 +44,7 @@ test('Compose app has no public port and uses a persistent SQLite volume', () =>
   const app = compose.slice(compose.indexOf('  app:'), compose.indexOf('  caddy:'));
   assert.doesNotMatch(app, /^\s{4}ports:/m);
   assert.match(app, /app_data:\/app\/data/);
-  assert.match(app, /DATABASE_PATH: \/app\/data\/foreign-trade\.sqlite/);
+  assert.match(app, /DATABASE_PATH: \/app\/data\/invoice-generator\.sqlite/);
   assert.match(app, /expose:\s*\n\s*- "3000"/);
 });
 test('Compose uses restart, health, read-only root and reduced privileges', () => {
@@ -141,7 +139,7 @@ test('business page and API remain protected by login', async () => {
 });
 test('administrator password can be supplied through stdin without persistence or output', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-phase5-admin-'));
-  const databasePath = path.join(directory, 'foreign-trade.sqlite');
+  const databasePath = path.join(directory, 'invoice-generator.sqlite');
   const password = 'TEST-stdin-passphrase-0000';
   const result = spawnSync(process.execPath, ['server/scripts/init-admin.js'], {
     cwd: root,
@@ -172,7 +170,7 @@ test('administrator password can be supplied through stdin without persistence o
 });
 test('SQLite backup helper creates a restorable consistent database copy', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-phase5-backup-'));
-  const source = path.join(directory, 'foreign-trade.sqlite'),
+  const source = path.join(directory, 'invoice-generator.sqlite'),
     destination = path.join(directory, 'backups', 'test.sqlite');
   const db = openDatabase(source);
   createBusinessRepositories(db).customers.put(
@@ -206,7 +204,7 @@ test('SQLite backup helper creates a restorable consistent database copy', () =>
 });
 test('SQLite backup helper rejects a destination outside persistent data', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-phase5-boundary-'));
-  const source = path.join(directory, 'data', 'foreign-trade.sqlite'),
+  const source = path.join(directory, 'data', 'invoice-generator.sqlite'),
     outside = path.join(directory, 'outside.sqlite');
   openDatabase(source).close();
   const result = spawnSync(process.execPath, ['server/scripts/backup-database.js'], {
@@ -220,49 +218,6 @@ test('SQLite backup helper rejects a destination outside persistent data', () =>
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
-});
-test('installer is idempotent around env, secret and administrator state', () => {
-  assert.match(install, /apt-get install -y ca-certificates curl git openssl openssh-client/);
-  assert.match(install, /if \[\[ ! -f \.env \]\]/);
-  assert.match(install, /preserving existing \.env and session secret/);
-  assert.match(install, /npm run admin:status/);
-  assert.match(install, /ADMIN_PASSWORD_STDIN=1/);
-  assert.doesNotMatch(install, /-e ADMIN_PASSWORD=/);
-  assert.doesNotMatch(install, /admin\/admin|ADMIN_PASSWORD=.*change-me/i);
-});
-test('installer uses SSH for private repository acquisition and never stores a token', () => {
-  assert.match(install, /git@github\\\.com|ssh:\/\/git@github/);
-  assert.match(install, /git clone/);
-  assert.doesNotMatch(install, /GITHUB_TOKEN|Authorization:|oauth2:/i);
-});
-test('updater backs up before fetch and permits fast-forward updates only', () => {
-  assert.ok(update.indexOf('npm run db:backup') < update.indexOf('git fetch'));
-  assert.match(update, /git merge --ff-only/);
-  assert.match(update, /merge-base --is-ancestor/);
-});
-test('deployment scripts never destroy volumes, prune Docker or reset credentials', () => {
-  const scripts = [install, update, read('deploy/backup.sh')].join('\n');
-  for (const forbidden of [
-    'down -v',
-    'volume prune',
-    'system prune',
-    'ADMIN_PASSWORD=admin',
-    'SESSION_SECRET=change-me',
-  ])
-    assert.doesNotMatch(scripts, new RegExp(forbidden, 'i'));
-});
-test('updater retains rollback image and pre-update database backup on failure', () => {
-  assert.match(update, /candidate-/);
-  assert.match(update, /APP_IMAGE_TAG=current/);
-  assert.match(update, /pre-update-/);
-  assert.match(update, /backup.*preserved/i);
-  assert.doesNotMatch(update, /new_head.*old_head.*exit 0/);
-});
-test('deployment scripts pass bash syntax and built-in validation', () => {
-  for (const script of ['deploy/install.sh', 'deploy/update.sh', 'deploy/backup.sh'])
-    assert.equal(spawnSync('bash', ['-n', script], { cwd: root }).status, 0);
-  assert.equal(spawnSync('bash', ['deploy/install.sh', '--check'], { cwd: root }).status, 0);
-  assert.equal(spawnSync('bash', ['deploy/update.sh', '--check'], { cwd: root }).status, 0);
 });
 test('git and Docker ignore files protect runtime data, secrets and certificates', () => {
   for (const text of [gitignore, dockerignore])

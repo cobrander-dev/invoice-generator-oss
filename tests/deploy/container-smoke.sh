@@ -10,10 +10,10 @@ grep -q '^DOMAIN=invoice.example.com$' .env || { printf 'Refusing unexpected TES
 grep -q '^APP_ORIGIN=http://localhost:18080$' .env || { printf 'Refusing non-TEST APP_ORIGIN.\n' >&2; exit 2; }
 export HTTP_PORT="127.0.0.1:18080"
 export HTTPS_PORT="127.0.0.1:18443"
-export COMPOSE_PROJECT_NAME="foreign-trade-invoice-ci-${GITHUB_RUN_ID:-$$}"
+export COMPOSE_PROJECT_NAME="invoice-generator-ci-${GITHUB_RUN_ID:-$$}"
 compose=(docker compose -f docker-compose.yml -f tests/deploy/docker-compose.test.yml)
 base_url="http://localhost:18080"
-image="foreign-trade-invoice-generator:current"
+image="invoice-generator:current"
 
 cleanup() { "${compose[@]}" down >/dev/null 2>&1 || true; }
 trap cleanup EXIT

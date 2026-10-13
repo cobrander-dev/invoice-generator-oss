@@ -1,0 +1,52 @@
+# Invoice Generator application. Used by the installer with either compose.https.yaml
+# (bundled Caddy on 80/443) or compose.external.yaml (existing reverse proxy).
+name: invoice-generator
+
+services:
+  app:
+    image: ${IG_APP_IMAGE:?IG_APP_IMAGE is required}
+    env_file:
+      - ${IG_CONFIG_DIR:?IG_CONFIG_DIR is required}/app.env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_PATH: /app/data/invoice-generator.sqlite
+      TRUST_PROXY_HOPS: '1'
+    volumes:
+      - data:/app/data
+    networks:
+      - backend
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('node:http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+networks:
+  backend:
+    internal: true
+
+volumes:
+  data: {}

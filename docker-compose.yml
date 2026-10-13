@@ -1,18 +1,18 @@
-name: foreign-trade-invoice-generator
+name: invoice-generator
 
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    image: foreign-trade-invoice-generator:${APP_IMAGE_TAG:-current}
+    image: invoice-generator:${APP_IMAGE_TAG:-current}
     env_file:
       - .env
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3000
-      DATABASE_PATH: /app/data/foreign-trade.sqlite
+      DATABASE_PATH: /app/data/invoice-generator.sqlite
       TRUST_PROXY_HOPS: "1"
     expose:
       - "3000"
