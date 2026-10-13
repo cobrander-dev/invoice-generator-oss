@@ -148,8 +148,9 @@ cmd_restore() {
   with_lock
   load_settings
   load_release "$IG_CURRENT"
-  work="$(mktemp -d)"
-  trap 'rm -rf -- "$work"' EXIT
+  IG_WORK="$(mktemp -d)"
+  trap 'rm -rf -- "${IG_WORK:-}"' EXIT
+  work="$IG_WORK"
   database="$(unpack_backup "$archive" "$work")"
   local verify_status=0
   verify_database_file "$IG_APP_IMAGE" "$database" || verify_status=$?
@@ -244,8 +245,9 @@ cmd_upgrade() {
   load_release "$old_dir"
   old_version="$IG_VERSION"
   old_app_image="$IG_APP_IMAGE"
-  work="$(mktemp -d)"
-  trap 'rm -rf -- "$work"' EXIT
+  IG_WORK="$(mktemp -d)"
+  trap 'rm -rf -- "${IG_WORK:-}"' EXIT
+  work="$IG_WORK"
   bundle="$(fetch_bundle "$target" "$work" "$bundle_file" "$bundle_sha")"
   load_release "$bundle"
   new_version="$IG_VERSION"

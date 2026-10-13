@@ -178,6 +178,7 @@ entry_healthy() {
 with_lock() {
   mkdir -p "$IG_ROOT"
   exec 9>"$IG_LOCK_FILE"
+  chmod 600 "$IG_LOCK_FILE"
   flock -n 9 || die BUSY '另一个 invoice-generator 操作正在进行，请稍后再试。'
 }
 
