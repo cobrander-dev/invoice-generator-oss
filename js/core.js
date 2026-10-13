@@ -1696,6 +1696,29 @@
     }
     return order;
   }
+  // Attachment policy shared by the browser (early feedback) and the server (enforcement).
+  // Active web content is refused because attachments are opened directly in the browser.
+  const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
+  const ACTIVE_ATTACHMENT_TYPE = /html|svg|javascript|ecmascript/i;
+  const ACTIVE_ATTACHMENT_EXTENSION = /\.(html?|xhtml|svgz?|js|mjs)$/i;
+  function attachmentProblem({ name, type, size } = {}) {
+    if (
+      name != null &&
+      (typeof name !== 'string' ||
+        !name.trim() ||
+        name.length > 255 ||
+        // eslint-disable-next-line no-control-regex -- reject control characters in file names
+        /[\u0000-\u001f\u007f/\\]/.test(name))
+    )
+      return '附件文件名无效 / Invalid attachment file name';
+    if (type != null && (typeof type !== 'string' || type.length > 127))
+      return '附件类型无效 / Invalid attachment type';
+    if (ACTIVE_ATTACHMENT_TYPE.test(type || '') || ACTIVE_ATTACHMENT_EXTENSION.test(name || ''))
+      return '不支持网页、SVG或脚本类附件 / HTML, SVG and script attachments are not allowed';
+    if (!(Number(size) <= ATTACHMENT_MAX_BYTES))
+      return '单个附件不能超过20 MB / Each attachment must be 20 MB or smaller';
+    return '';
+  }
   function formatMoney(value, currency = 'USD') {
     return `${MONEY_SYMBOLS[currency] || `${currency} `}${money(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
@@ -1774,6 +1797,8 @@
     documentSettings,
     newOrder,
     formatMoney,
+    ATTACHMENT_MAX_BYTES,
+    attachmentProblem,
   };
   if (typeof module !== 'undefined') module.exports = global.FTCore;
 })(typeof window !== 'undefined' ? window : globalThis);

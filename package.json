@@ -28,10 +28,10 @@
     "test:server:multi-user": "node --test tests/server/multi-user-*.test.js",
     "test:pdf:phase6": "node tests/pdf-dependency-regression.js",
     "test:all": "npm test && npm run test:pdf:phase6 && node --test tests/server/*.test.js",
-    "test:server:encoding": "node --test tests/server/frontend-output-encoding.test.js",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.js\"",
-    "format:check": "prettier --check \"**/*.js\""
+    "format:check": "prettier --check \"**/*.js\"",
+    "test:server:security": "node --test tests/server/frontend-output-encoding.test.js tests/server/input-policy.test.js"
   },
   "dependencies": {
     "argon2": "0.45.1",

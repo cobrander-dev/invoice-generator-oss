@@ -3094,8 +3094,14 @@
       if (action === 'backup') await previewBackup(files[0]);
       if (action === 'attachment') {
         const category = $('#attachment-category')?.value || '其他 / Other';
+        const accepted = files.filter((file) => {
+          const problem = C.attachmentProblem(file);
+          if (problem) toast(`${file.name}：${problem}`, 'error');
+          return !problem;
+        });
+        if (!accepted.length) return;
         state.currentOrder = readOrderForm();
-        for (const file of files) {
+        for (const file of accepted) {
           state.currentOrder.attachments = state.currentOrder.attachments || [];
           state.currentOrder.attachments.push({
             id: C.uid('file'),
@@ -3109,11 +3115,16 @@
         }
         render();
         markDirty();
-        toast(`已添加 ${files.length} 个附件`);
+        toast(`已添加 ${accepted.length} 个附件`);
       }
       if (action.startsWith('payment-slip:')) {
         const index = Number(action.split(':')[1]),
-          file = files[0];
+          file = files[0],
+          problem = C.attachmentProblem(file);
+        if (problem) {
+          toast(`${file.name}：${problem}`, 'error');
+          return;
+        }
         state.currentOrder = readOrderForm();
         state.currentOrder.paymentRecords[index].paymentSlip = {
           name: file.name,

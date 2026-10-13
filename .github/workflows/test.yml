@@ -34,7 +34,7 @@ jobs:
       - run: npm run test:server:phase7
       - run: npm run test:server:host-caddy
       - run: npm run test:server:multi-user
-      - run: npm run test:server:encoding
+      - run: npm run test:server:security
       - name: Prepare isolated TEST container environment
         run: |
           printf 'NODE_ENV=test\nHOST=0.0.0.0\nPORT=3000\nDOMAIN=invoice.example.com\nAPP_ORIGIN=http://localhost:18080\nDATABASE_PATH=/app/data/foreign-trade.sqlite\nBUSINESS_BACKUP_LIMIT=64mb\nSESSION_SECRET=%s\nTRUST_PROXY_HOPS=1\n' "$(openssl rand -hex 48)" > .env

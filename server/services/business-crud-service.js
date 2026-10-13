@@ -1,6 +1,7 @@
 'use strict';
 const { ValidationError, NotFoundError, ConflictError } = require('../db/errors');
 const { isAdmin, requireOwned } = require('../auth/authorization');
+const { requireNewRecordId } = require('./input-policy');
 
 const SYSTEM_ACTOR = Object.freeze({
   id: null,
@@ -39,6 +40,7 @@ class BusinessCrudService {
     this.bulkProductsTransaction = db.transaction((items) =>
       items.map((item) => {
         requireRecord(item?.data);
+        if (!repositories.products.get(item.data.id)) requireNewRecordId(item.data.id);
         return repositories.products.put(item.data, requireExpectedVersion(item.expectedVersion));
       }),
     );
@@ -71,6 +73,7 @@ class BusinessCrudService {
   createInside(repository, record, actor, ownerUserId) {
     actor = this.actor(actor);
     requireRecord(record);
+    requireNewRecordId(record.id);
     if (repository === 'customers') {
       const row = this.repositories.customers.put(record, 0);
       return this.repositories.customers.setMetadata(row.payload.id, {

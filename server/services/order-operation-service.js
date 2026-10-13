@@ -4,6 +4,11 @@ const C = require('../../js/core.js');
 const { ValidationError, ConflictError, NotFoundError } = require('../db/errors');
 const { clone } = require('../repositories/business-repository');
 const { requireExpectedVersion, requireRecord } = require('./business-crud-service');
+const {
+  requireCurrency,
+  requireValidOrderFiles,
+  requireValidPaymentCurrencies,
+} = require('./input-policy');
 
 const PROTECTED_FIELDS = Object.freeze([
   'orderNumber',
@@ -183,12 +188,16 @@ class OrderOperationService {
     });
     order = C.calculateOrder(order);
     order.activePiRevision = null;
+    requireCurrency(order.currency);
+    requireValidOrderFiles(order);
     return this.save(order, 0);
   }
   updateInside(id, proposed, expectedVersion) {
     requireRecord(proposed, id);
     const row = this.current(id, expectedVersion);
     assertOrdinaryUpdateSafe(row.payload, proposed);
+    requireCurrency(proposed.currency, row.payload.currency);
+    requireValidOrderFiles(proposed, row.payload);
     const finalPackingList = isFinalPackingList(row.payload, row.payload.packingListDocument)
       ? clone(row.payload.packingListDocument)
       : null;
@@ -268,6 +277,8 @@ class OrderOperationService {
       }
       if (!C.PAYMENT_STAGES.some((stage) => stage.value === input.currentPaymentStage))
         throw new ValidationError('Payment stage is invalid');
+      requireValidPaymentCurrencies(input.paymentRecords, row.payload.paymentRecords);
+      requireValidOrderFiles({ paymentRecords: input.paymentRecords }, row.payload);
       order.paymentRecords = clone(input.paymentRecords);
       order.currentPaymentStage = input.currentPaymentStage;
       order.amountPayableNowManualValue = Number(input.amountPayableNowManualValue) || 0;
