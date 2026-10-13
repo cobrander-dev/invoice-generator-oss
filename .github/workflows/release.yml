@@ -87,7 +87,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
-        run: gh release create "$VERSION" dist/* --draft --prerelease --target "$GITHUB_SHA" --title "Invoice Generator $VERSION"
+        # Only versions with a suffix (e.g. v1.0.0-rc.1) are prereleases. A stable version must not
+        # be one, because the documented releases/latest/download URL skips prereleases.
+        run: |
+          prerelease=()
+          [[ "$VERSION" == *-* ]] && prerelease=(--prerelease)
+          gh release create "$VERSION" dist/* --draft "${prerelease[@]}" --target "$GITHUB_SHA" --title "Invoice Generator $VERSION"
 
   verify:
     needs: [image, bundle]
