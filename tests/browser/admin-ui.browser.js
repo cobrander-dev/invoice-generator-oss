@@ -382,8 +382,9 @@ function englishOnlyText() {
       text = node.nodeValue.replace(/\s+/g, ' ').trim();
     if (!text || !/[A-Za-z]{3}/.test(text) || /[\u3400-\u9fff]/.test(text)) continue;
     if (
+      parent.tagName === 'TD' ||
       parent.closest(
-        '.paper,td,[data-no-i18n],.record-title,.record-sub,option,script,textarea,.i18n-en',
+        '.paper,[data-no-i18n],.record-title,.record-sub,option,script,textarea,.i18n-en',
       ) ||
       parent.offsetParent === null
     )
@@ -525,6 +526,27 @@ async function run() {
       assert.equal(result.status, 200, `${action}: ${JSON.stringify(result.data)}`);
       version = result.data.meta.rowVersion;
     }
+    // Confirm the actual shipment and generate a Packing List for the Packing List editor scan.
+    const current = (await admin.request('/api/orders/order-docs')).data.data;
+    const shipped = await admin.write(
+      '/api/orders/order-docs',
+      'PUT',
+      {
+        ...current,
+        actualShipmentDate: '2026-09-12',
+        actualTransportMethod: 'Sea Freight',
+        actualTransportConfirmed: true,
+      },
+      { 'If-Match': String(version) },
+    );
+    assert.equal(shipped.status, 200, JSON.stringify(shipped.data));
+    const packing = await admin.write(
+      '/api/orders/order-docs/generate-packing-list',
+      'POST',
+      { expectedPackingListVersion: 0 },
+      { 'If-Match': String(shipped.data.meta.rowVersion) },
+    );
+    assert.equal(packing.status, 200, JSON.stringify(packing.data));
     assert.equal(
       (
         await admin.write('/api/products', 'POST', {
@@ -636,6 +658,21 @@ async function run() {
         if (documents.length) problems['order-documents'] = documents;
         const clipped = await page.evaluate(clippedLabels, '#order-form');
         if (clipped.length) problems['order-documents clipped labels'] = clipped;
+        await page.click('[data-generate-pl]');
+        await page.waitFor(() => !!document.querySelector('#packing-list-form'), [], {
+          message: 'packing list editor',
+        });
+        await sleep(200);
+        await page.screenshot('desktop-page-packing-edit', { full: true });
+        if (process.env.BROWSER_TEST_REPORT)
+          console.log(
+            'REPORT packing-edit:',
+            JSON.stringify(await page.evaluate(englishOnlyText), null, 1),
+          );
+        const packingProblems = await page.evaluate(englishOnlyChrome);
+        if (packingProblems.length) problems['packing-edit'] = packingProblems;
+        const packingClipped = await page.evaluate(clippedLabels, '#packing-list-form');
+        if (packingClipped.length) problems['packing-edit clipped labels'] = packingClipped;
         assert.deepEqual(problems, {});
       },
     );

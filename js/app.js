@@ -881,7 +881,7 @@
     const lines = (o.items || [])
       .map(
         (item, index) =>
-          `<article class="pl-line" data-pl-line="${index}"><div class="pl-line-title"><div class="pl-product-heading"><span class="pl-line-number">${index + 1}</span><strong>Packaging line ${index + 1}</strong></div><span class="pl-line-state">Packaging details</span></div><div class="pl-main-row"><div class="pl-product-cell"><span>Product Description</span><strong>${esc(item.description || '-')}</strong><small>${esc(C.formatModelSku(item.modelSku) || 'No Model / SKU')}</small></div>${field('Package Type', 'packageType', item.packageType || 'Carton')} ${field('Cartons', 'cartonQty', item.cartonQty, 'number', 'min="0" step="1" required')}${field('Qty / Carton', 'quantityPerCarton', item.quantityPerCarton, 'number', 'min="0" step="any" required')}${field('Total Qty / Actual Shipped Qty', 'packingQuantity', item.packingQuantity, 'number', 'readonly')}${field('Unit', 'unit', item.unit, 'text', 'readonly')}${field('CBM', 'cartonVolume', item.cartonVolume.toFixed(6), 'text', 'readonly')}</div><details class="pl-line-details"><summary>展开包装详情 / Packaging Details</summary><div class="pl-detail-grid"><div class="pl-detail-group"><span class="pl-detail-label">Product Context</span>${field('Origin', 'countryOfOrigin', item.countryOfOrigin, 'text', 'readonly')}</div><div class="pl-detail-group"><span class="pl-detail-label">Weight per Carton</span>${field('N.W. / Carton (KG)', 'netWeightPerCarton', item.netWeightPerCarton ?? 0, 'number', 'min="0" step="0.001" required')}${field('G.W. / Carton (KG)', 'grossWeightPerCarton', item.grossWeightPerCarton ?? 0, 'number', 'min="0" step="0.001" required')}</div><div class="pl-detail-group"><span class="pl-detail-label">Carton Dimensions (cm)</span><div class="pl-dimension-grid">${field('Length', 'cartonLength', item.cartonLength, 'number', 'min="0" step="any" required')}${field('Width', 'cartonWidth', item.cartonWidth, 'number', 'min="0" step="any" required')}${field('Height', 'cartonHeight', item.cartonHeight, 'number', 'min="0" step="any" required')}</div><small class="field-hint">CBM is calculated from the existing carton dimensions.</small></div><div class="warning pl-line-warning" data-pl-line-warning hidden></div></div></details></article>`,
+          `<article class="pl-line" data-pl-line="${index}"><div class="pl-line-title"><div class="pl-product-heading"><span class="pl-line-number">${index + 1}</span><strong>包装行 ${index + 1}</strong></div><span class="pl-line-state">Packaging details</span></div><div class="pl-main-row"><div class="pl-product-cell"><span>Product Description</span><strong>${esc(item.description || '-')}</strong><small>${esc(C.formatModelSku(item.modelSku) || '未填写型号 / SKU')}</small></div>${field('Package Type', 'packageType', item.packageType || 'Carton')} ${field('Cartons', 'cartonQty', item.cartonQty, 'number', 'min="0" step="1" required')}${field('Qty / Carton', 'quantityPerCarton', item.quantityPerCarton, 'number', 'min="0" step="any" required')}${field('Total Qty / Actual Shipped Qty', 'packingQuantity', item.packingQuantity, 'number', 'readonly')}${field('Unit', 'unit', item.unit, 'text', 'readonly')}${field('CBM', 'cartonVolume', item.cartonVolume.toFixed(6), 'text', 'readonly')}</div><details class="pl-line-details"><summary>展开包装详情 / Packaging Details</summary><div class="pl-detail-grid"><div class="pl-detail-group"><span class="pl-detail-label">Product Context</span>${field('Origin', 'countryOfOrigin', item.countryOfOrigin, 'text', 'readonly')}</div><div class="pl-detail-group"><span class="pl-detail-label">Weight per Carton</span>${field('N.W. / Carton (KG)', 'netWeightPerCarton', item.netWeightPerCarton ?? 0, 'number', 'min="0" step="0.001" required')}${field('G.W. / Carton (KG)', 'grossWeightPerCarton', item.grossWeightPerCarton ?? 0, 'number', 'min="0" step="0.001" required')}</div><div class="pl-detail-group"><span class="pl-detail-label">Carton Dimensions (cm)</span><div class="pl-dimension-grid">${field('Length', 'cartonLength', item.cartonLength, 'number', 'min="0" step="any" required')}${field('Width', 'cartonWidth', item.cartonWidth, 'number', 'min="0" step="any" required')}${field('Height', 'cartonHeight', item.cartonHeight, 'number', 'min="0" step="any" required')}</div><small class="field-hint">CBM is calculated from the existing carton dimensions.</small></div><div class="warning pl-line-warning" data-pl-line-warning hidden></div></div></details></article>`,
       )
       .join('');
     return `<form id="packing-list-form" class="order-editor pl-editor" novalidate><section class="order-section pl-section" open><summary><span>1. Document Identity / 关联单据</span></summary><div class="order-section-body">${identity}</div></section><section class="order-section pl-section" open><summary><span>2. Parties & Shipment Context / 单据与物流上下文</span></summary><div class="order-section-body">${context}</div></section><section class="order-section pl-section" open><summary><span>3. Shipping Mark / Marks & Numbers</span></summary><div class="order-section-body"><div class="pl-mark-field">${field('Shipping Marks / Marks & Numbers', 'shippingMark', o.shippingMark || 'N/M', 'text', 'required')}<small class="field-hint">包装外部标识；为空时可继续使用 N/M。</small></div></div></section><section class="order-section pl-section" open><summary><span>4. Actual Packaging / 实际包装</span></summary><div class="order-section-body"><div class="pl-table-head"><span>产品与包装数据</span><small>主行录入箱数和每箱数量，展开后维护重量与尺寸。</small></div><div class="pl-lines">${lines}</div></div></section><section class="order-section pl-section pl-summary-section" open><summary><span>5. Packing Summary / 包装摘要</span></summary><div class="order-section-body"><div class="packing-summary pl-total-summary"><span><small>Total Cartons</small><b data-pl-total-cartons>${o.totalCartons}</b></span><span><small>Total N.W.</small><b data-pl-total-net>${o.totalNetWeight.toFixed(2)} KG</b></span><span><small>Total G.W.</small><b data-pl-total-gross>${o.totalGrossWeight.toFixed(2)} KG</b></span><span><small>Total CBM</small><b data-pl-total-cbm>${o.totalCBM.toFixed(3)}</b></span></div></div></section><section class="order-section pl-section" open><summary><span>6. Packing Remarks / 包装备注</span></summary><div class="order-section-body"><div class="pl-remarks-field">${textArea('Packing Remarks', 'packingRemarks', o.packingRemarks || '')}<small class="field-hint">包装说明与特殊包装要求；不会与 Shipping Mark 混用。</small></div></div></section><section class="order-section pl-section pl-export-section" open><summary><span>7. Signing & Export / 签章与导出</span></summary><div class="order-section-body"><div class="pl-action-groups"><div class="action-group primary-actions"><span class="action-label">Primary</span><button type="submit" class="btn">保存Packing List</button><button type="button" class="btn" data-preview-draft-pl>预览Draft Packing List</button><button type="button" class="btn primary pl-electronic-action" data-final-pl-mode="Electronic">生成Final Packing List电子签章版</button></div><div class="action-group secondary-actions"><span class="action-label">Secondary</span><button type="button" class="btn" data-final-pl title="Final Packing List无签章版">生成Final Packing List</button><button type="button" class="btn" data-final-pl-mode="Print">生成Final Packing List打印签章版</button></div></div><p class="pl-export-note">Packing List独立保存，不会修改PI或CI金额。</p></div></section></form>`;
@@ -930,11 +930,9 @@
       if (warning) {
         const issues = [];
         if (item.cartonQty * item.quantityPerCarton !== item.packingQuantity)
-          issues.push(
-            'Number of Cartons × Quantity per Carton must equal Actual Shipped Quantity.',
-          );
+          issues.push('箱数 × 每箱数量必须等于实际出货数量。');
         if (item.grossWeightPerCarton < item.netWeightPerCarton)
-          issues.push('Gross Weight per Carton cannot be less than Net Weight per Carton.');
+          issues.push('每箱毛重不能小于每箱净重。');
         warning.textContent = issues.join(' ');
         warning.hidden = !issues.length;
       }
@@ -951,7 +949,7 @@
   function packingListIssues(record) {
     const o = C.calculateOrder(record.data || {}),
       errors = [];
-    if (!o.packingListNumber) errors.push('Packing List Number不能为空');
+    if (!o.packingListNumber) errors.push('装箱单编号不能为空');
     if (
       state.packingLists.some(
         (x) =>
@@ -959,12 +957,11 @@
           (x.number === o.packingListNumber || x.data?.packingListNumber === o.packingListNumber),
       )
     )
-      errors.push(`Packing List Number ${o.packingListNumber} 已存在`);
-    if (!String(o.shippingMark || '').trim()) errors.push('Shipping Marks不能为空');
+      errors.push(`装箱单编号 ${o.packingListNumber} 已存在`);
+    if (!String(o.shippingMark || '').trim()) errors.push('唛头不能为空');
     o.items.forEach((item, index) => {
-      if (item.cartonQty <= 0) errors.push(`第 ${index + 1} 行Number of Cartons必须大于0`);
-      if (item.quantityPerCarton <= 0)
-        errors.push(`第 ${index + 1} 行Quantity per Carton必须大于0`);
+      if (item.cartonQty <= 0) errors.push(`第 ${index + 1} 行箱数必须大于 0`);
+      if (item.quantityPerCarton <= 0) errors.push(`第 ${index + 1} 行每箱数量必须大于 0`);
       if (Math.abs(item.cartonQty * item.quantityPerCarton - item.packingQuantity) > 0.0001)
         errors.push(`第 ${index + 1} 行箱数×每箱数量必须等于实际出货数量`);
       if (item.grossWeightPerCarton < item.netWeightPerCarton)
@@ -1661,7 +1658,7 @@
         dims = [p.cartonLength, p.cartonWidth, p.cartonHeight].some((x) => C.asNumber(x) > 0)
           ? `${C.asNumber(p.cartonLength)} × ${C.asNumber(p.cartonWidth)} × ${C.asNumber(p.cartonHeight)} cm`
           : '';
-      return `<div class="product-packing-summary"><span>${esc(weights.join(' · ') || 'Weight —')}</span><span>${p.cartonQty ? `${esc(C.asNumber(p.cartonQty))} pcs/carton` : 'Cartons —'}</span><span>${esc(dims || 'Dimensions —')}</span></div>`;
+      return `<div class="product-packing-summary"><span>${esc(weights.join(' · ') || '重量 —')}</span><span>${p.cartonQty ? `每箱 ${esc(C.asNumber(p.cartonQty))} 件` : '每箱数量 —'}</span><span>${esc(dims || '尺寸 —')}</span></div>`;
     };
     return `<div class="toolbar product-toolbar-refined"><div class="search product-search"><label class="sr-only" for="product-search">搜索产品</label><input id="product-search" placeholder="搜索名称、描述、SKU、型号、HS 编码、材质或原产地" value="${esc(f.productQ || '')}"></div><label class="product-filter"><span>${I18N.label('Unit')}</span><select id="product-unit-filter">${optionList(units, 'All Units', f.productUnit)}</select></label><label class="product-filter"><span>${I18N.label('Origin')}</span><select id="product-origin-filter">${optionList(origins, 'All Origins', f.productOrigin)}</select></label><label class="product-filter product-sort"><span>${bi('排序', 'Sort')}</span><select id="product-sort"><option value="name" ${sort === 'name' ? 'selected' : ''}>Product Name</option><option value="sku" ${sort === 'sku' ? 'selected' : ''}>SKU</option><option value="hs" ${sort === 'hs' ? 'selected' : ''}>HS Code</option><option value="updated" ${sort === 'updated' ? 'selected' : ''}>Recently Updated</option></select></label>${recordViewSwitch('products')}<div class="product-toolbar-actions"><button class="btn" data-import-csv>导入 CSV</button><button class="btn" data-export-csv>导出 CSV</button><button class="btn primary" data-new-product>＋ 新增产品</button></div></div><section class="panel product-list-panel">${
       rows.length

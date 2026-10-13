@@ -254,4 +254,4 @@ th .i18n-en{display:block;margin:1px 0 0;font-size:10px;font-weight:550;color:#8
 /* Older "parent span" rules must not box, pad or border the bilingual label parts. */
 span.i18n-zh,span.i18n-en{padding:0;border:0;border-radius:0;background:none;box-shadow:none;min-width:0;width:auto;height:auto}
 span.i18n-en{text-transform:none;letter-spacing:0}
-.ci-status-meta b .i18n-en,.ci-parties-grid .i18n-en,.backup-metric .i18n-en,.dashboard-safety-grid .i18n-en,.account-details .i18n-en,.backup-status-meta .i18n-en,.result-card .i18n-en{display:block;margin-left:0}
+.ci-status-meta b .i18n-en,.ci-parties-grid .i18n-en,.backup-metric .i18n-en,.dashboard-safety-grid .i18n-en,.account-details .i18n-en,.backup-status-meta .i18n-en,.result-card .i18n-en,.pl-reference .i18n-en,.persistent-amount-summary .i18n-en,.ci-amount-grid .i18n-en,.backup-preview-meta .i18n-en{display:block;margin-left:0}
