@@ -18,6 +18,7 @@ BUNDLE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # shellcheck source=lib/https.sh
 . "$BUNDLE_DIR/lib/https.sh"
 
+step() { printf '\n[%s/5] %s\n' "$1" "$2"; }
 interactive() { [[ "${IG_NONINTERACTIVE:-0}" != 1 ]]; }
 ask() {
   local prompt="$1" answer=''
@@ -168,9 +169,11 @@ save_installer_settings() {
 }
 
 start_services() {
+  step 3 '正在下载镜像（首次安装可能需要几分钟）'
   ensure_image "$IG_APP_IMAGE"
+  [[ "$IG_PROXY_MODE" != bundled ]] || ensure_image "$IG_CADDY_IMAGE"
+  step 4 '正在配置服务'
   if [[ "$IG_PROXY_MODE" == bundled ]]; then
-    ensure_image "$IG_CADDY_IMAGE"
     write_caddyfile
     quietly compose up -d --remove-orphans app caddy
   else
@@ -252,7 +255,7 @@ install_cli_and_schedule() {
 }
 
 summary() {
-  say ''
+  step 5 '安装成功'
   say '========================================'
   say '  Invoice Generator 安装完成'
   say '========================================'

@@ -2,7 +2,7 @@
 
 ## 准备
 
-- 一台 Ubuntu 22.04 / 24.04 或 Debian 12 / 13 服务器，x86_64 或 arm64，推荐 2 vCPU / 2 GiB 内存 / 20 GiB 磁盘。
+- 一台 Ubuntu 22.04 / 24.04 / 26.04 或 Debian 12 / 13 服务器，x86_64 或 arm64，推荐 2 vCPU / 2 GiB 内存 / 20 GiB 磁盘。
 - root 或 sudo 权限，能通过 SSH 登录。
 - 使用域名时：域名的 A 记录已指向服务器公网 IP。
 - 云服务器安全组与 `ufw` 等防火墙放行 TCP 80 和 443（使用内置 HTTPS 时）。
@@ -10,11 +10,10 @@
 ## 安装
 
 ```bash
-curl -fsSLO https://github.com/cobrander-dev/invoice-generator-oss/releases/latest/download/install.sh
-sudo bash install.sh
+curl -fsSL https://github.com/cobrander-dev/invoice-generator-oss/releases/latest/download/install.sh -o install.sh && bash install.sh
 ```
 
-安装指定版本：把 `latest/download` 换成 `download/v1.2.3`。
+`&&` 保证只有完整下载成功才会运行安装脚本；安装脚本再用内嵌的 SHA-256 校验安装包。非 root 用户运行时会自动通过 sudo 重新执行。安装指定版本：把 `latest/download` 换成 `download/v1.2.3`。
 
 安装向导会询问访问地址和管理员账号。安装完成后用浏览器打开 `https://你的域名或IP`，用刚创建的管理员登录。
 

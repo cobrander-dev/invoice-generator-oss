@@ -186,6 +186,27 @@ test('the unrendered install.sh template refuses to run', () => {
   assert.match(result.stderr, /INSTALLER_NOT_RENDERED/);
 });
 
+test('a downloaded install.sh re-runs itself through sudo, forwarding only IG_* answers', (t) => {
+  if (process.getuid && process.getuid() === 0) return t.skip('needs a non-root user');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ig-elevate-'));
+  fs.writeFileSync(path.join(dir, 'sudo'), '#!/bin/bash\nprintf "[%s]" "$@"\n', { mode: 0o755 });
+  const rendered = read('installer/install.sh').replace('@BUNDLE_SHA256@', '0'.repeat(64));
+  fs.writeFileSync(path.join(dir, 'install.sh'), rendered);
+  const env = {
+    ...process.env,
+    PATH: `${dir}:${process.env.PATH}`,
+    IG_ACCESS_HOST: 'a.example.com',
+    OTHER: 'x',
+  };
+  const fromFile = spawnSync('bash', ['install.sh'], { cwd: dir, env, encoding: 'utf8' });
+  assert.equal(fromFile.stdout, '[IG_ACCESS_HOST=a.example.com][bash][install.sh]');
+  // A script read from a pipe cannot be re-run, so it must stop instead of running partially.
+  const piped = spawnSync('bash', [], { cwd: dir, env, input: rendered, encoding: 'utf8' });
+  assert.notEqual(piped.status, 0);
+  assert.match(piped.stderr, /ROOT_REQUIRED/);
+  assert.doesNotMatch(piped.stdout, /\[bash\]/);
+});
+
 test('release bundles require digest-pinned images', () => {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'ig-dist-'));
   try {

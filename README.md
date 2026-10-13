@@ -30,14 +30,15 @@ Browser -> HTTPS / Caddy -> Node.js / Express -> SQLite（Docker 持久卷）
 
 ## 一键安装
 
-在一台 Ubuntu 22.04 / 24.04 或 Debian 12 / 13 服务器（x86_64 或 arm64）上以 root 运行：
+在一台 Ubuntu 22.04 / 24.04 / 26.04 或 Debian 12 / 13 服务器（x86_64 或 arm64）上，以 root 或有 sudo 权限的用户复制运行这一条命令：
 
 ```bash
-curl -fsSLO https://github.com/cobrander-dev/invoice-generator-oss/releases/latest/download/install.sh
-sudo bash install.sh
+curl -fsSL https://github.com/cobrander-dev/invoice-generator-oss/releases/latest/download/install.sh -o install.sh && bash install.sh
 ```
 
-安装程序全程中文交互：
+只有安装脚本完整下载成功后才会执行（`&&`）；非 root 用户会自动通过 sudo 运行。安装指定版本（包括测试版）：把 `latest/download` 换成 `download/版本号`，例如 `download/v0.1.0-rc.4`。
+
+安装程序全程中文交互，并按“检查系统 → 安装依赖 → 下载镜像 → 配置服务 → 安装成功”显示进度：
 
 1. 检测系统；未安装 Docker 时询问后从 Docker 官方源安装（先核对官方 GPG 密钥指纹）。
 2. 下载安装包，并用 `install.sh` 内嵌的 SHA-256 校验；安装包内每个文件再按清单校验，镜像按 digest 固定。
