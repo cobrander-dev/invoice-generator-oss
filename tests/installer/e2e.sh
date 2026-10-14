@@ -146,7 +146,6 @@ if [[ "$mode" == gateway-host-caddy ]]; then
   sleep 3
   other_site() { curl -fsS -k --max-time 10 --connect-to other.ci.test:443:127.0.0.1:443 https://other.ci.test/; }
   [[ "$(other_site)" == 'other website' ]] || fail 'host Caddy site not serving'
-  caddyfile_before="$(sha256sum /etc/caddy/Caddyfile)"
 fi
 
 if [[ "$mode" == gateway-nginx ]]; then

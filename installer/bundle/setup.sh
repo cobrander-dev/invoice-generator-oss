@@ -239,7 +239,6 @@ choose_gateway() {
       return 1
       ;;
   esac
-  IG_GATEWAY_STATE="$state"
   return 0
 }
 

@@ -68,6 +68,7 @@ function setup() {
         env: {
           ...process.env,
           OSS_GATEWAY_ROOT: path.join(dir, 'gw'),
+          OSS_GATEWAY_LOCK: path.join(dir, 'lock'),
           OSS_GATEWAY_HOST_CADDYFILE: path.join(dir, 'host.Caddyfile'),
           LOG: path.join(dir, 'log'),
           STATE: 'managed',

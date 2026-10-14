@@ -80,9 +80,11 @@ detect() {
   fi
 }
 
+# The lock lives outside the gateway directory so using a host Caddy creates nothing there.
 with_lock() {
-  mkdir -p "$GATEWAY_ROOT"
-  exec 8>"$GATEWAY_ROOT/.lock"
+  lock_dir=/run
+  [ -d "$lock_dir" ] && [ -w "$lock_dir" ] || lock_dir=/tmp
+  exec 8>"${OSS_GATEWAY_LOCK:-$lock_dir/oss-gateway.lock}"
   flock -w 120 8 || fail GATEWAY_BUSY '另一个网关操作正在进行，请稍后再试。'
 }
 
