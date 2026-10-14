@@ -19,6 +19,7 @@ const scripts = [
   'installer/bundle/lib/https.sh',
   'installer/bundle/lib/host-caddy.sh',
   'installer/bundle/lib/validate.sh',
+  'installer/bundle/oss-gateway.sh',
   'scripts/build-installer-bundle.sh',
 ];
 
@@ -504,4 +505,54 @@ test('upgrade rollback preserves the post-switch database before restoring old d
     rollback.indexOf('preserve_database failed-upgrade') < rollback.indexOf('replace_database'),
   );
   assert.match(rollback, /die UPGRADE_ROLLBACK_HALTED/);
+});
+
+test('shared gateway mode: domain only, never takes over an unmanageable owner of 80/443', () => {
+  const directory = setupFunctions();
+  const run = (script, env) =>
+    bash(
+      `. "${directory}/setup.sh"; ${stubs} gateway() { [ "$1" = detect ] && echo "$GW_STATE"; }; ${script}`,
+      { IG_NONINTERACTIVE: '1', PORTS: '', LABELS: '', IG_ACCESS_KIND: 'domain', ...env },
+    );
+  try {
+    let result = run(
+      'choose_proxy_mode; echo "$IG_HTTPS_MODE $IG_PROXY_MODE $IG_GATEWAY $IG_APP_PORT $IG_HTTPS_PORT"',
+      {
+        IG_HTTPS_MODE: 'gateway',
+        GW_STATE: 'absent',
+      },
+    );
+    assert.equal(result.stdout.trim().split('\n').at(-1), 'gateway external yes 3001 443');
+    result = run('choose_proxy_mode; echo "$IG_GATEWAY"', {
+      IG_HTTPS_MODE: 'gateway',
+      GW_STATE: 'managed',
+    });
+    assert.equal(result.stdout.trim().split('\n').at(-1), 'yes');
+    result = run('choose_proxy_mode', { IG_HTTPS_MODE: 'gateway', GW_STATE: 'unmanageable nginx' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /GATEWAY_UNAVAILABLE/);
+    assert.match(result.stderr, /nginx/);
+    result = run('choose_proxy_mode', {
+      IG_HTTPS_MODE: 'gateway',
+      GW_STATE: 'absent',
+      IG_ACCESS_KIND: 'ip',
+    });
+    assert.match(result.stderr, /GATEWAY_UNAVAILABLE/);
+    // Unattended installs without a mode keep the original behaviour.
+    result = run('choose_proxy_mode; echo "$IG_HTTPS_MODE $IG_PROXY_MODE $IG_GATEWAY"', {
+      GW_STATE: 'absent',
+    });
+    assert.equal(result.stdout.trim().split('\n').at(-1), 'port bundled no');
+    assert.match(run('choose_proxy_mode', { IG_HTTPS_MODE: 'other' }).stderr, /CONFIG_INVALID/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('gateway site keeps the app on loopback and adds only its own domain', () => {
+  const site = bash(`${lib} render_gateway_site invoice.example.com 3001`).stdout;
+  assert.equal(site.split('\n')[0], 'invoice.example.com {');
+  assert.match(site, /reverse_proxy 127\.0\.0\.1:3001/);
+  assert.match(site, /max_size 70MB/);
+  assert.equal(site.match(/^\S.*\{$/gm).length, 1);
 });

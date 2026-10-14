@@ -17,7 +17,11 @@ curl -fsSL https://github.com/cobrander-dev/invoice-generator-oss/releases/lates
 
 安装向导会询问访问地址、HTTPS 端口（默认 443）和管理员账号。安装完成后用浏览器打开 `https://你的域名或IP`（自定义端口时为 `https://你的域名或IP:端口`），用刚创建的管理员登录。
 
-### 自定义 HTTPS 端口（同一服务器安装多个项目）
+### 同一服务器安装多个项目（推荐：共享 HTTPS 网关）
+
+在“HTTPS 方式”一步选择 **1) 共享 HTTPS 网关**：每个项目使用自己的域名，网址不带端口，公网只开放 80/443。检测已有 Caddy/Nginx、备份、校验与回滚见 [HTTPS_GATEWAY.md](HTTPS_GATEWAY.md)。
+
+### 自定义 HTTPS 端口（高级）
 
 在“HTTPS 端口”一步输入例如 `8443`。证书申请方式、80 端口的共享、防火墙与 Cookie 注意事项见 [HTTPS_PORTS.md](HTTPS_PORTS.md)。
 
@@ -94,6 +98,9 @@ sudo invoice-generator upgrade v1.2.3   # 指定版本
 | `RELEASE_CHECKSUM_MISMATCH` | 安装包校验失败，请重新下载 |
 | `PROJECT_EXISTS` | 已有同名 Docker 项目或数据卷且不是本程序创建的，为避免覆盖已停止 |
 | `ACCESS_HOST_INVALID` | 域名格式无效，或 IP 不是公网 IPv4 |
+| `GATEWAY_UNAVAILABLE` | 80/443 被无法安全接管的程序占用（如 Nginx），未做任何更改，见 [HTTPS_GATEWAY.md](HTTPS_GATEWAY.md) |
+| `GATEWAY_SITE_CONFLICT` | 该域名已由网关中的其他站点使用，未做任何更改 |
+| `GATEWAY_CONFIG_INVALID` / `GATEWAY_RELOAD_FAILED` | 新站点未通过校验或重新加载失败，已恢复原配置，其他网站不受影响 |
 | `HTTPS_PORT_IN_USE` | 所选 HTTPS 端口已被其他程序占用，未做任何更改；请换一个端口 |
 | `HTTPS_PORT_INVALID` | HTTPS 端口需为 443 或 1024–65535 |
 | `ACME_HTTP_PORT_UNAVAILABLE` | 80 端口被无关程序占用，自定义端口无法自动申请受信任证书，见 [HTTPS_PORTS.md](HTTPS_PORTS.md) |

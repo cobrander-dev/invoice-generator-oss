@@ -3,7 +3,7 @@
 #
 # Non-interactive answers (isolated tests and automation):
 #   IG_NONINTERACTIVE=1 IG_ACCESS_HOST=<domain|public IPv4> IG_ADMIN_USERNAME=<name>
-#   IG_ADMIN_PASSWORD_FILE=<file> [IG_HTTPS_PORT=443|1024-65535]
+#   IG_ADMIN_PASSWORD_FILE=<file> [IG_HTTPS_MODE=gateway|port|external] [IG_HTTPS_PORT=443|1024-65535]
 #   [IG_PROXY_MODE=auto|bundled|external] [IG_HOST_CADDY=yes|no] [IG_TLS_ISSUER=auto|internal]
 #   [IG_ACME_CA=<https ACME directory> IG_ACME_CA_ROOT=<PEM file>]  (private ACME CA, tests)
 set -Eeuo pipefail
@@ -207,8 +207,98 @@ configure_external_proxy() {
   return 0
 }
 
+gateway() { sh "$BUNDLE_DIR/oss-gateway.sh" "$@"; }
+
+# Shared HTTPS gateway (docs/HTTPS_GATEWAY.md): one Caddy on 80/443 routes each domain to
+# its project's loopback port. Returns 1 when it cannot be used safely on this server.
+choose_gateway() {
+  local state
+  if [[ "$IG_ACCESS_KIND" != domain ]]; then
+    say '共享 HTTPS 网关按域名转发，需要域名；IP 访问请选择独立 HTTPS 端口。'
+    return 1
+  fi
+  state="$(gateway detect)"
+  case "$state" in
+    managed)
+      note '检测到共享 HTTPS 网关，将为本项目添加独立站点（先校验，失败自动回滚，其他站点不受影响）'
+      ;;
+    host-caddy)
+      note '检测到宿主机 Caddy 占用 80/443，将在 /etc/caddy/Caddyfile 中添加本项目站点'
+      note '修改前自动备份，先校验再重新加载，失败自动恢复，其他网站不受影响'
+      if interactive && ! confirm '继续？[Y/n]: '; then return 1; fi
+      ;;
+    absent)
+      note '80/443 空闲：将安装共享 HTTPS 网关（Docker 项目 oss-gateway，占用 80/443）'
+      note '之后同一服务器的其他项目可以直接添加自己的域名'
+      if interactive && ! confirm '安装共享 HTTPS 网关？[Y/n]: '; then return 1; fi
+      ;;
+    *)
+      say "80/443 端口已被 ${state#unmanageable } 占用，无法安全接管：不会停止或修改它。"
+      note '可改选“独立 HTTPS 端口”或“已有反向代理”。'
+      interactive || die GATEWAY_UNAVAILABLE "80/443 已被 ${state#unmanageable } 占用，无法使用共享 HTTPS 网关。"
+      return 1
+      ;;
+  esac
+  IG_GATEWAY_STATE="$state"
+  return 0
+}
+
+# gateway (recommended), port (own Caddy on 443 or a custom port) or external.
+choose_https_mode() {
+  local choice
+  IG_HTTPS_MODE="${IG_HTTPS_MODE:-}"
+  if [[ -z "$IG_HTTPS_MODE" ]]; then
+    if [[ "${IG_PROXY_MODE:-auto}" == external ]]; then
+      IG_HTTPS_MODE=external
+    elif ! interactive || [[ -n "${IG_HTTPS_PORT:-}" || "${IG_PROXY_MODE:-auto}" == bundled ]]; then
+      IG_HTTPS_MODE=port # unattended installs keep their original behaviour
+    elif [[ "$IG_ACCESS_KIND" != domain ]]; then
+      note '使用 IP 访问：共享 HTTPS 网关需要域名，将使用本项目自己的 HTTPS 入口'
+      IG_HTTPS_MODE=port
+    fi
+  fi
+  [[ -z "$IG_HTTPS_MODE" || "$IG_HTTPS_MODE" =~ ^(gateway|port|external)$ ]] || die CONFIG_INVALID 'IG_HTTPS_MODE 无效。'
+  while true; do
+    if [[ -z "$IG_HTTPS_MODE" ]]; then
+      say ''
+      say '请选择 HTTPS 方式：'
+      note '1) 共享 HTTPS 网关（推荐）：网址不带端口，同一服务器的多个项目共用 80/443，按域名转发'
+      note '2) 独立 HTTPS 端口（高级）：本项目使用自己的 Caddy，端口可选 443 或 8443 等'
+      note '3) 已有反向代理：只监听本机端口，由你现有的 Nginx/Caddy 提供 HTTPS'
+      choice="$(ask '请选择 [1]: ')"
+      case "${choice:-1}" in
+        1) IG_HTTPS_MODE=gateway ;;
+        2) IG_HTTPS_MODE=port ;;
+        3) IG_HTTPS_MODE=external ;;
+        *) continue ;;
+      esac
+    fi
+    if [[ "$IG_HTTPS_MODE" == gateway ]] && ! choose_gateway; then
+      interactive || die GATEWAY_UNAVAILABLE '无法使用共享 HTTPS 网关。'
+      IG_HTTPS_MODE=''
+      continue
+    fi
+    return 0
+  done
+}
+
 choose_proxy_mode() {
   IG_HOST_CADDY_SITE=no
+  IG_GATEWAY=no
+  choose_https_mode
+  case "$IG_HTTPS_MODE" in
+    gateway)
+      IG_GATEWAY=yes
+      IG_PROXY_MODE=external
+      IG_HTTPS_PORT=443
+      IG_RELAY_ROLE=''
+      IG_HTTP_BIND=80
+      IG_APP_PORT="$(free_loopback_port 3001)" || die NO_FREE_PORT '127.0.0.1:3001-3099 没有空闲端口。'
+      note "本项目内部端口：127.0.0.1:${IG_APP_PORT}（只在本机监听，不对公网开放）"
+      return 0
+      ;;
+    external) IG_PROXY_MODE=external ;;
+  esac
   choose_https_port
   if [[ "$IG_PROXY_MODE" == bundled ]]; then
     choose_certificate_plan
@@ -218,6 +308,18 @@ choose_proxy_mode() {
   else
     IG_APP_PORT=3001
   fi
+}
+
+# Renders this project's gateway site and adds it; the gateway is created first when absent.
+register_gateway_site() {
+  local site="$IG_CONFIG_DIR/gateway-site.caddy"
+  if [[ "$(gateway detect)" == absent ]]; then
+    gateway create || die GATEWAY_START_FAILED '共享 HTTPS 网关安装失败，其他网站未受影响。'
+  fi
+  render_gateway_site "$IG_ACCESS_HOST" "$IG_APP_PORT" >"$site"
+  chmod 644 "$site"
+  gateway add-site invoice-generator "$IG_ACCESS_HOST" "$site" ||
+    die GATEWAY_SITE_FAILED '无法在共享 HTTPS 网关中添加站点，已回滚，其他网站未受影响。应用仍只在本机端口运行。'
 }
 
 write_configuration() {
@@ -268,6 +370,7 @@ save_installer_settings() {
     "HTTP_BIND=$IG_HTTP_BIND" \
     "RELAY_ROLE=${IG_RELAY_ROLE:-}" \
     "ACME_CA=${IG_ACME_CA:-}" \
+    "GATEWAY=${IG_GATEWAY:-no}" \
     "BACKUP_KEEP=${IG_BACKUP_KEEP:-14}" \
     "INSTALLED_VERSION=$IG_VERSION"
 }
@@ -286,12 +389,13 @@ start_services() {
     quietly compose up -d --remove-orphans app
   fi
   app_healthy || die APP_UNHEALTHY '应用未能通过健康检查。可运行 invoice-generator logs 查看日志。'
+  [[ "${IG_GATEWAY:-no}" != yes ]] || register_gateway_site
   if [[ "$IG_HOST_CADDY_SITE" == yes ]]; then
     ensure_host_caddy_site /etc/caddy/Caddyfile "$IG_ACCESS_HOST" "127.0.0.1:$IG_APP_PORT" ||
       warn '宿主机 Caddy 配置未修改（已恢复原配置），请参考示例手动添加。'
   fi
   if ! entry_healthy; then
-    if [[ "$IG_PROXY_MODE" == bundled ]]; then
+    if [[ "$IG_PROXY_MODE" == bundled || "${IG_GATEWAY:-no}" == yes ]]; then
       warn 'HTTPS 入口暂未就绪，证书可能仍在申请中。稍后运行 invoice-generator doctor 检查。'
     else
       die APP_UNREACHABLE "无法访问 http://127.0.0.1:$IG_APP_PORT/health。"
@@ -389,7 +493,10 @@ summary() {
   say ''
   say "数据备份目录：${IG_BACKUP_DIR}（每天自动备份，保留最近 ${IG_BACKUP_KEEP:-14} 份自动备份）"
   say '请定期把备份复制到服务器以外的安全位置。'
-  if [[ "$IG_PROXY_MODE" == bundled ]]; then
+  if [[ "${IG_GATEWAY:-no}" == yes ]]; then
+    say '云服务器请在安全组/防火墙中放行 TCP 80 和 443。'
+    say '同一服务器的其他网站可用 sudo oss-gateway add <名称> <域名> 127.0.0.1:<端口> 添加。'
+  elif [[ "$IG_PROXY_MODE" == bundled ]]; then
     if [[ "$IG_RELAY_ROLE" == holder ]]; then
       say "云服务器请在安全组/防火墙中放行 TCP 80 和 TCP ${IG_HTTPS_PORT}。"
       [[ "$IG_HTTPS_PORT" == 443 ]] || say '80 端口用于证书验证，并为同一服务器上的其他项目转发证书验证请求，请保持本项目运行。'

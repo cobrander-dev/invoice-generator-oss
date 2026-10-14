@@ -60,6 +60,17 @@ render_caddyfile() {
   fi
 }
 
+# Site block for the shared HTTPS gateway (docs/HTTPS_GATEWAY.md).
+render_gateway_site() {
+  local host="$1" port="$2"
+  printf '%s {\n' "$host"
+  printf '\tencode zstd gzip\n'
+  printf '\trequest_body {\n\t\tmax_size 70MB\n\t}\n'
+  printf '\theader -Server\n'
+  printf '\treverse_proxy 127.0.0.1:%s\n' "$port"
+  printf '}\n'
+}
+
 write_caddyfile() {
   local temporary
   temporary="$(mktemp "$IG_CADDYFILE.XXXXXX")"

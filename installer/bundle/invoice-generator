@@ -45,7 +45,9 @@ cmd_status() {
   load_release "$IG_CURRENT"
   say "版本：$IG_VERSION"
   say "访问地址：$(public_origin "$IG_ACCESS_HOST" "$IG_HTTPS_PORT")"
-  if [[ "$IG_PROXY_MODE" == bundled ]]; then
+  if [[ "$IG_GATEWAY" == yes ]]; then
+    say "HTTPS：共享 HTTPS 网关 → 127.0.0.1:$IG_APP_PORT"
+  elif [[ "$IG_PROXY_MODE" == bundled ]]; then
     say "HTTPS：内置 Caddy，端口 ${IG_HTTPS_PORT}（证书验证：$(relay_role_text)）"
   else
     say "HTTPS：已有反向代理 → 127.0.0.1:$IG_APP_PORT"
@@ -72,6 +74,12 @@ cmd_doctor() {
       ok 'HTTPS 代理运行中' || bad 'HTTPS 代理未运行'
   fi
   entry_healthy && ok '访问入口可用' || bad '访问入口检查失败'
+  if [[ "$IG_GATEWAY" == yes ]]; then
+    case "$(sh "$IG_CURRENT/oss-gateway.sh" detect)" in
+      managed | host-caddy) ok '共享 HTTPS 网关运行中' ;;
+      *) bad '共享 HTTPS 网关不可用；运行 invoice-generator https --apply 重新添加站点' ;;
+    esac
+  fi
   if [[ "$IG_PROXY_MODE" == bundled ]]; then
     case "$IG_RELAY_ROLE" in
       '') attention '安装于自定义端口功能之前：运行 invoice-generator https --apply 可为同一服务器上的其他项目转发证书验证' ;;
@@ -379,6 +387,17 @@ cmd_https() {
   local apply=0 status=0
   [[ "${1:-}" == --apply ]] && apply=1
   load_settings
+  if [[ "$IG_GATEWAY" == yes ]]; then
+    if [[ "$apply" == 1 ]]; then
+      gateway_apply
+      return
+    fi
+    say "访问地址：https://$IG_ACCESS_HOST"
+    say "HTTPS：共享 HTTPS 网关 → 127.0.0.1:$IG_APP_PORT"
+    report_certificate 0 || status=$?
+    [[ "$status" -ne 2 ]] || status=0 # a local-CA certificate is served (and reported as such)
+    return "$status"
+  fi
   if [[ "$IG_PROXY_MODE" == external ]]; then
     say "访问地址：https://$IG_ACCESS_HOST"
     say "HTTPS 由现有反向代理提供，应用监听 127.0.0.1:${IG_APP_PORT}。示例配置：$IG_PROXY_DIR"
@@ -402,6 +421,19 @@ cmd_https() {
     return 0
   fi
   return "$status"
+}
+
+# Re-adds this project's site to the shared gateway (creating the gateway when ports 80/443
+# are free), for example after the gateway was reinstalled. Other sites are not touched.
+gateway_apply() {
+  local site="$IG_CONFIG_DIR/gateway-site.caddy" gateway="$IG_CURRENT/oss-gateway.sh"
+  with_lock
+  [[ -f "$gateway" ]] || die RELEASE_TOO_OLD '当前版本不支持该操作，请先升级。'
+  if [[ "$(sh "$gateway" detect)" == absent ]]; then sh "$gateway" create; fi
+  render_gateway_site "$IG_ACCESS_HOST" "$IG_APP_PORT" >"$site"
+  chmod 644 "$site"
+  sh "$gateway" add-site invoice-generator "$IG_ACCESS_HOST" "$site"
+  entry_healthy && say "访问入口可用：https://$IG_ACCESS_HOST" || warn 'HTTPS 入口暂未就绪，稍后运行 invoice-generator https 查看。'
 }
 
 # Re-decides the certificate validation path for the current server (for example after another

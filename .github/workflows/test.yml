@@ -34,6 +34,7 @@ jobs:
       - run: npm run test:server:multi-user
       - run: npm run test:server:security
       - run: npm run test:server:installer
+      - run: npm run test:server:gateway
       - run: npm run test:server:delete
       - name: Administration UI in headless Chrome (desktop and mobile)
         run: npm run test:browser
@@ -74,7 +75,7 @@ jobs:
       - name: ShellCheck installer and test scripts
         run: |
           shellcheck -x -S warning installer/install.sh installer/bundle/setup.sh installer/bundle/invoice-generator \
-            installer/bundle/lib/*.sh scripts/build-installer-bundle.sh tests/installer/e2e.sh \
+            installer/bundle/lib/*.sh installer/bundle/oss-gateway.sh scripts/build-installer-bundle.sh tests/installer/e2e.sh \
             tests/installer/legacy-upgrade.sh
       - name: Validate production Caddyfiles with the pinned Caddy image
         run: |
@@ -88,6 +89,14 @@ jobs:
           render_caddyfile domain invoice.example.com auto 443 none > "$RUNNER_TEMP/caddy/alpn"
           render_caddyfile domain invoice.example.com auto 9443 none > "$RUNNER_TEMP/caddy/local"
           render_caddyfile ip 203.0.113.10 auto 8443 holder > "$RUNNER_TEMP/caddy/ip-holder"
+          # Shared gateway: main configuration with a project site and an extra service.
+          mkdir -p "$RUNNER_TEMP/gateway/sites"
+          OSS_GATEWAY_SOURCE_ONLY=1 . installer/bundle/oss-gateway.sh
+          render_main_caddyfile > "$RUNNER_TEMP/gateway/Caddyfile"
+          render_gateway_site invoice.example.com 3001 > "$RUNNER_TEMP/gateway/sites/invoice-generator.caddy"
+          printf 'n8n.example.com {\n\treverse_proxy 127.0.0.1:5678\n}\n' > "$RUNNER_TEMP/gateway/sites/n8n.caddy"
+          docker run --rm -v "$RUNNER_TEMP/gateway/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$RUNNER_TEMP/gateway/sites:/etc/caddy/sites:ro" \
+            caddy:2.11.4-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
           for kind in domain ip holder member alpn local ip-holder; do
             docker run --rm -v "$RUNNER_TEMP/caddy/$kind:/etc/caddy/Caddyfile:ro" caddy:2.11.4-alpine \
               caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
@@ -152,7 +161,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [domain, ip, external, custom-port, conflict]
+        mode: [domain, ip, external, custom-port, conflict, gateway, gateway-host-caddy, gateway-nginx]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Installer end-to-end (${{ matrix.mode }})
@@ -165,6 +174,8 @@ jobs:
           sudo invoice-generator logs app || true
           sudo invoice-generator logs caddy || true
           sudo cat /opt/invoice-generator/config/installer.env /opt/invoice-generator/config/Caddyfile || true
+          sudo sh -c 'cat /opt/oss-gateway/sites/*.caddy /etc/caddy/Caddyfile' || true
+          sudo docker logs "$(sudo docker ps -aq --filter label=oss.gateway=1)" 2>&1 | tail -n 40 || true
 
   installer-legacy-upgrade:
     # Installations made before custom HTTPS ports keep working after an upgrade by their old CLI.

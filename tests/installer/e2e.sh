@@ -8,10 +8,13 @@
 #   external     Nginx already owns 80/443; app on loopback behind the generated Nginx config
 #   custom-port  bundled Caddy on HTTPS port 8443 (unattended), Nginx keeps 443
 #   conflict     interactive wizard: 8443 is taken by Nginx and refused, then 9443 is chosen
+#   gateway      shared HTTPS gateway created on 80/443; app on 127.0.0.1:3001; extra site added
+#   gateway-host-caddy  an existing systemd Caddy with another site becomes the gateway
+#   gateway-nginx       Nginx owns 80/443: gateway mode is refused and nothing is changed
 # All modes then test backup, restore, upgrade, failed-upgrade rollback and isolation.
 set -Eeuo pipefail
 
-mode="${1:?usage: e2e.sh domain|ip|external|custom-port|conflict}"
+mode="${1:?usage: e2e.sh domain|ip|external|custom-port|conflict|gateway|gateway-host-caddy|gateway-nginx}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 [[ "${CI:-}" == true && "${GITHUB_ACTIONS:-}" == true && "$(id -u)" -eq 0 ]] ||
   {
@@ -49,6 +52,7 @@ case "$mode" in
   ip) host=203.0.113.10 ;;
   custom-port) host=invoice.ci.test port=8443 ;;
   conflict) host=invoice.ci.test port=9443 ;;
+  gateway | gateway-host-caddy | gateway-nginx) host=invoice.ci.test ;;
   *) fail "unknown mode $mode" ;;
 esac
 origin="https://$host"
@@ -102,6 +106,10 @@ for spec in a:v0.0.1-ci.1:ci-a b:v0.0.1-ci.2:ci-b broken:v0.0.1-ci.3:ci-broken l
   IFS=: read -r name version tag <<<"$spec"
   IG_ALLOW_LOCAL_IMAGES=1 "$root/scripts/build-installer-bundle.sh" "$version" "invoice-generator:$tag" "$caddy_image" "$dist/$name" >/dev/null
 done
+oss-gateway-cli() {
+  if [[ -x /usr/local/bin/oss-gateway ]]; then oss-gateway "$@"; else sh /opt/invoice-generator/current/oss-gateway.sh "$@"; fi
+}
+
 sha() { awk '$2 == "invoice-generator-installer.tar.gz" {print $1}' "$dist/$1/SHA256SUMS"; }
 
 step 'start a neighbouring Docker project that must stay untouched'
@@ -109,7 +117,7 @@ docker volume create neighbor_data >/dev/null
 docker run -d --name neighbor-app --label com.docker.compose.project=neighbor -v neighbor_data:/data \
   busybox:1.37 sh -c 'echo keep-me > /data/marker; sleep infinity' >/dev/null
 
-if [[ "$mode" == external || "$mode" == custom-port || "$mode" == conflict ]]; then
+if [[ "$mode" == external || "$mode" == custom-port || "$mode" == conflict || "$mode" == gateway-nginx ]]; then
   step 'start Nginx on 80/443 before installation'
   mkdir -p "$work/nginx/conf.d" "$work/nginx/tls"
   openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=$host" -addext "subjectAltName=DNS:$host" \
@@ -117,7 +125,7 @@ if [[ "$mode" == external || "$mode" == custom-port || "$mode" == conflict ]]; t
   listen=''
   [[ "$mode" == custom-port ]] && listen='listen 80 default_server; '
   [[ "$mode" == conflict ]] && listen='listen 8443 ssl; '
-  [[ "$mode" == external ]] && listen='listen 80 default_server; listen 443 ssl default_server; '
+  [[ "$mode" == external || "$mode" == gateway-nginx ]] && listen='listen 80 default_server; listen 443 ssl default_server; '
   [[ "$mode" == custom-port ]] && listen+='listen 443 ssl default_server; '
   printf 'server { %sssl_certificate /tls/cert.pem; ssl_certificate_key /tls/key.pem; return 404; }\n' "$listen" \
     >"$work/nginx/conf.d/default.conf"
@@ -127,6 +135,34 @@ if [[ "$mode" == external || "$mode" == custom-port || "$mode" == conflict ]]; t
 fi
 
 export IG_BUNDLE_FILE="$dist/a/invoice-generator-installer.tar.gz" IG_TLS_ISSUER=internal
+# No public DNS on the runner: the gateway (or the existing host Caddy) uses its local CA.
+export OSS_GATEWAY_LOCAL_CERTS=1
+
+if [[ "$mode" == gateway-host-caddy ]]; then
+  step 'an existing systemd Caddy already serves another website on 80/443'
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq caddy >/dev/null
+  printf '{\n\tlocal_certs\n}\n\nother.ci.test {\n\trespond "other website" 200\n}\n' >/etc/caddy/Caddyfile
+  systemctl restart caddy
+  sleep 3
+  other_site() { curl -fsS -k --max-time 10 --connect-to other.ci.test:443:127.0.0.1:443 https://other.ci.test/; }
+  [[ "$(other_site)" == 'other website' ]] || fail 'host Caddy site not serving'
+  caddyfile_before="$(sha256sum /etc/caddy/Caddyfile)"
+fi
+
+if [[ "$mode" == gateway-nginx ]]; then
+  step 'gateway mode refuses to take over Nginx on 80/443 and changes nothing'
+  nginx_conf_before="$(sha256sum "$work/nginx/conf.d/default.conf")"
+  expect_failure GATEWAY_UNAVAILABLE env IG_NONINTERACTIVE=1 IG_HTTPS_MODE=gateway IG_ACCESS_HOST="$host" \
+    IG_ADMIN_USERNAME=ci-admin IG_ADMIN_PASSWORD_FILE="$work/admin-password" bash "$dist/a/install.sh"
+  [[ ! -f /opt/invoice-generator/config/installer.env ]] || fail 'refused install left an installation marker'
+  [[ ! -e /opt/oss-gateway ]] || fail 'refused install created a gateway'
+  [[ -z "$(docker ps -aq --filter label=com.docker.compose.project=invoice-generator)" ]] || fail 'containers were started'
+  [[ "$(docker inspect --format '{{.State.Running}}' ci-nginx)" == true ]] || fail 'Nginx was stopped'
+  [[ "$(sha256sum "$work/nginx/conf.d/default.conf")" == "$nginx_conf_before" ]] || fail 'Nginx configuration changed'
+  curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:443/ | grep -q 404 || fail 'Nginx no longer answers'
+  printf '\nE2E PASS (%s)\n' "$mode"
+  exit 0
+fi
 
 if [[ "$mode" == ip ]]; then
   step 'installer refuses a pre-existing foreign invoice-generator volume'
@@ -151,13 +187,17 @@ elif [[ "$mode" == conflict ]]; then
   rm -rf /opt/invoice-generator
 
   step 'interactive wizard: busy 8443 is refused, then 9443 is accepted'
-  printf '%s' '[["访问地址", "invoice.ci.test"], ["HTTPS 端口", "8443"], ["HTTPS 端口", "9443"], ["管理员用户名或邮箱", "ci-admin"], ["管理员密码", "env:IG_TEST_PASSWORD"], ["再次输入密码", "env:IG_TEST_PASSWORD"]]' >"$work/answers.json"
+  printf '%s' '[["访问地址", "invoice.ci.test"], ["请选择 [1]", "2"], ["HTTPS 端口", "8443"], ["HTTPS 端口", "9443"], ["管理员用户名或邮箱", "ci-admin"], ["管理员密码", "env:IG_TEST_PASSWORD"], ["再次输入密码", "env:IG_TEST_PASSWORD"]]' >"$work/answers.json"
   IG_TEST_PASSWORD="$password" python3 "$root/tests/installer/drive-tty.py" "$work/answers.json" -- bash "$dist/a/install.sh" |
     tee "$work/wizard.log"
   grep -q '端口 8443 已被占用' "$work/wizard.log" || fail 'busy port was not reported'
 elif [[ "$mode" == custom-port ]]; then
   step 'non-interactive installation on HTTPS port 8443 while Nginx keeps 80/443'
   IG_NONINTERACTIVE=1 IG_ACCESS_HOST="$host" IG_HTTPS_PORT=8443 IG_ADMIN_USERNAME=ci-admin \
+    IG_ADMIN_PASSWORD_FILE="$work/admin-password" bash "$dist/a/install.sh"
+elif [[ "$mode" == gateway || "$mode" == gateway-host-caddy ]]; then
+  step "non-interactive installation behind the shared HTTPS gateway ($mode)"
+  IG_NONINTERACTIVE=1 IG_HTTPS_MODE=gateway IG_ACCESS_HOST="$host" IG_ADMIN_USERNAME=ci-admin \
     IG_ADMIN_PASSWORD_FILE="$work/admin-password" bash "$dist/a/install.sh"
 else
   step "non-interactive installation ($mode)"
@@ -170,7 +210,26 @@ step 'installation state'
 [[ "$(stat -c '%a' /opt/invoice-generator/backups)" == 700 ]] || fail 'backups directory is not 0700'
 grep -q '^SESSION_SECRET=[0-9a-f]\{96\}$' /opt/invoice-generator/config/app.env || fail 'session secret not generated'
 [[ "$(installed_version)" == v0.0.1-ci.1 ]] || fail 'installed version'
-if [[ "$mode" == external ]]; then
+if [[ "$mode" == gateway || "$mode" == gateway-host-caddy ]]; then
+  grep -q '^PROXY_MODE=external$' /opt/invoice-generator/config/installer.env || fail 'gateway installs run the app behind a proxy'
+  grep -q '^GATEWAY=yes$' /opt/invoice-generator/config/installer.env || fail 'gateway mode not recorded'
+  grep -q "^APP_ORIGIN=https://$host$" /opt/invoice-generator/config/app.env || fail 'APP_ORIGIN must not carry a port'
+  [[ "$(docker port "$(service_container app)" 3000/tcp)" == 127.0.0.1:3001 ]] || fail 'app must be published on 127.0.0.1:3001 only'
+  [[ -z "$(service_container caddy)" ]] || fail 'the project must not run its own Caddy'
+  if [[ "$mode" == gateway ]]; then
+    gw="$(docker ps -q --filter label=oss.gateway=1)"
+    [[ -n "$gw" ]] || fail 'shared gateway not running'
+    [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$gw")" == host ]] || fail 'gateway must use the host network'
+    grep -q '^invoice.ci.test {$' /opt/oss-gateway/sites/invoice-generator.caddy || fail 'gateway site missing'
+    ! ss -H -ltn 'sport = :2019' | grep -q . || fail 'gateway admin API must not listen on TCP'
+    [[ -L /usr/local/bin/oss-gateway ]] || fail 'oss-gateway command not installed'
+  else
+    [[ ! -e /opt/oss-gateway ]] || fail 'host Caddy must be used instead of a new gateway'
+    grep -q '^# BEGIN oss-gateway site invoice-generator invoice.ci.test$' /etc/caddy/Caddyfile || fail 'host Caddy site block missing'
+    [[ "$(other_site)" == 'other website' ]] || fail 'existing website broken by the installation'
+    ls /etc/caddy/Caddyfile.oss-backup-* >/dev/null || fail 'host Caddyfile was not backed up'
+  fi
+elif [[ "$mode" == external ]]; then
   grep -q '^PROXY_MODE=external$' /opt/invoice-generator/config/installer.env || fail 'external mode not selected'
   [[ "$(docker port "$(service_container app)" 3000/tcp)" == 127.0.0.1:3001 ]] || fail 'app must be published on 127.0.0.1:3001 only'
   [[ -z "$(service_container caddy)" ]] || fail 'bundled Caddy must not run'
@@ -201,6 +260,27 @@ else
   fi
 fi
 systemctl is-active --quiet invoice-generator-backup.timer || fail 'backup timer inactive'
+if [[ "$mode" == gateway || "$mode" == gateway-host-caddy ]]; then
+  step 'a broken site is rejected by validation; every existing site keeps working'
+  printf 'broken.ci.test {\n\tthis_is_not_a_directive\n}\n' >"$work/broken.caddy"
+  gateway_before="$( { cat /opt/oss-gateway/sites/*.caddy /etc/caddy/Caddyfile 2>/dev/null || true; } | sha256sum)"
+  expect_failure GATEWAY_CONFIG_INVALID oss-gateway-cli add-site broken broken.ci.test "$work/broken.caddy"
+  [[ "$( { cat /opt/oss-gateway/sites/*.caddy /etc/caddy/Caddyfile 2>/dev/null || true; } | sha256sum)" == "$gateway_before" ]] ||
+    fail 'a rejected site changed the gateway configuration'
+  expect_failure GATEWAY_SITE_CONFLICT oss-gateway-cli add stolen invoice.ci.test 127.0.0.1:9
+  [[ "$mode" != gateway-host-caddy ]] || [[ "$(other_site)" == 'other website' ]] || fail 'existing website broken'
+
+  step 'another service (like n8n) gets its own domain through the same gateway'
+  docker run -d --name ci-extra --network host busybox:1.37 sh -c \
+    'mkdir -p /www && echo extra-service > /www/index.html && httpd -f -p 127.0.0.1:5678 -h /www' >/dev/null
+  oss-gateway-cli add extra extra.ci.test 127.0.0.1:5678
+  for _ in $(seq 1 20); do
+    curl -fsS -k --max-time 5 --connect-to extra.ci.test:443:127.0.0.1:443 https://extra.ci.test/ 2>/dev/null | grep -q extra-service && break
+    sleep 1
+  done
+  curl -fsS -k --connect-to extra.ci.test:443:127.0.0.1:443 https://extra.ci.test/ | grep -q extra-service || fail 'extra site not served'
+  oss-gateway-cli remove extra
+fi
 if [[ "$mode" != external ]]; then
   # The certificate actually served is reported as it is (the local CA in these tests).
   invoice-generator https | tee "$work/https.log"

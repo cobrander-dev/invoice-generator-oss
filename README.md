@@ -43,7 +43,7 @@ curl -fsSL https://github.com/cobrander-dev/invoice-generator-oss/releases/lates
 
 1. 检测系统；未安装 Docker 时询问后从 Docker 官方源安装（先核对官方 GPG 密钥指纹）。
 2. 下载安装包，并用 `install.sh` 内嵌的 SHA-256 校验；安装包内每个文件再按清单校验，镜像按 digest 固定。
-3. 输入访问地址：**有域名填域名，没有域名直接回车使用服务器公网 IP**；再选择 HTTPS 端口（直接回车使用 443，同一服务器安装多个项目时可用 8443 等其他端口）。
+3. 输入访问地址：**有域名填域名，没有域名直接回车使用服务器公网 IP**；再选择 HTTPS 方式：共享 HTTPS 网关（推荐，同一服务器多个项目各用自己的域名、网址不带端口）、独立 HTTPS 端口（443 或 8443 等）或已有反向代理。
 4. 自动生成安全密钥，启动服务，创建管理员（密码隐藏输入）。
 5. 启用每日自动备份，安装 `invoice-generator` 管理命令。
 
@@ -52,6 +52,7 @@ curl -fsSL https://github.com/cobrander-dev/invoice-generator-oss/releases/lates
 | 场景 | HTTPS |
 | --- | --- |
 | 有域名，80/443 空闲 | 内置 Caddy 自动申请并续期证书 |
+| 同一服务器多个项目、多个域名（推荐） | 共享 HTTPS 网关：公网只用 80/443，按域名转发，网址不带端口，每个域名自动申请并续期证书；已有宿主机 Caddy 时安全添加站点，Nginx 等无法安全接管时停止并说明。详见 [docs/HTTPS_GATEWAY.md](docs/HTTPS_GATEWAY.md) |
 | 自定义 HTTPS 端口（如 8443） | 80 端口空闲或由同一服务器上的另一个 OSS 项目占用时自动申请并续期证书；80 被无关程序占用时明确提示，只能选择本机 CA 证书或已有反向代理。详见 [docs/HTTPS_PORTS.md](docs/HTTPS_PORTS.md) |
 | 无域名，使用公网 IP | 优先申请 Let's Encrypt 短期 IP 证书并自动续期；失败时使用本机 CA 证书，`invoice-generator https` 可导出根证书及指纹 |
 | 已有 Nginx / Caddy 提供 HTTPS（向导中输入 `p`） | 应用只监听 `127.0.0.1:3001`，在 `/opt/invoice-generator/proxy` 生成 Nginx 和 Caddy 配置示例；检测到运行中的宿主机 Caddy 时可自动添加站点（先校验并备份原配置，失败自动恢复） |

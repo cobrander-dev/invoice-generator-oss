@@ -109,6 +109,8 @@ load_settings() {
   IG_HTTP_BIND="${IG_HTTP_BIND:-80}"
   IG_RELAY_ROLE="$(env_get "$IG_INSTALLER_ENV" RELAY_ROLE)"
   IG_ACME_CA="$(env_get "$IG_INSTALLER_ENV" ACME_CA)"
+  IG_GATEWAY="$(env_get "$IG_INSTALLER_ENV" GATEWAY)"
+  IG_GATEWAY="${IG_GATEWAY:-no}"
   [[ "$IG_ACCESS_KIND" == domain || "$IG_ACCESS_KIND" == ip ]] || die CONFIG_INVALID 'ACCESS_KIND 无效。'
   [[ "$IG_PROXY_MODE" == bundled || "$IG_PROXY_MODE" == external ]] || die CONFIG_INVALID 'PROXY_MODE 无效。'
   [[ "$IG_APP_PORT" =~ ^[0-9]+$ ]] || die CONFIG_INVALID 'APP_PORT 无效。'
@@ -194,7 +196,7 @@ public_origin() {
 # End-to-end check through the public entry point configured for this installation.
 entry_healthy() {
   local url port="${IG_HTTPS_PORT:-443}"
-  if [[ "$IG_PROXY_MODE" == bundled ]]; then
+  if [[ "$IG_PROXY_MODE" == bundled || "${IG_GATEWAY:-no}" == yes ]]; then
     url="$(public_origin "$IG_ACCESS_HOST" "$port")/health"
     for _ in $(seq 1 30); do
       curl -fsS --max-time 5 -k --connect-to "$IG_ACCESS_HOST:$port:127.0.0.1:$port" "$url" >/dev/null 2>&1 && return 0
