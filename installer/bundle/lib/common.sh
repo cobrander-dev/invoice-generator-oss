@@ -19,6 +19,10 @@ IG_LOCK_FILE="$IG_ROOT/.lock"
 IG_DATA_VOLUME="${IG_PROJECT}_data"
 IG_DATABASE_PATH=/app/data/invoice-generator.sqlite
 IG_CLI_LINK=/usr/local/bin/invoice-generator
+# Shared with other self-hosted projects on the same server (see docs/HTTPS_PORTS.md): the
+# project whose proxy owns host port 80 relays ACME HTTP-01 challenges to the others.
+IG_RELAY_NETWORK=oss-https-relay
+IG_ACME_CA_ROOT_FILE="$IG_CONFIG_DIR/acme-ca-root.pem"
 
 say() { printf '%s\n' "$*"; }
 note() { printf '  · %s\n' "$*"; }
@@ -91,17 +95,27 @@ public_ipv4() {
 }
 
 load_settings() {
-  [[ -f "$IG_INSTALLER_ENV" ]] || die NOT_INSTALLED "未找到安装配置 $IG_INSTALLER_ENV。"
+  [[ -f "$IG_INSTALLER_ENV" ]] || die NOT_INSTALLED "未找到安装配置 ${IG_INSTALLER_ENV}。"
   IG_ACCESS_HOST="$(env_get "$IG_INSTALLER_ENV" ACCESS_HOST)"
   IG_ACCESS_KIND="$(env_get "$IG_INSTALLER_ENV" ACCESS_KIND)"
   IG_PROXY_MODE="$(env_get "$IG_INSTALLER_ENV" PROXY_MODE)"
   IG_APP_PORT="$(env_get "$IG_INSTALLER_ENV" APP_PORT)"
   IG_TLS_ISSUER="$(env_get "$IG_INSTALLER_ENV" TLS_ISSUER)"
   IG_BACKUP_KEEP="$(env_get "$IG_INSTALLER_ENV" BACKUP_KEEP)"
+  # Installations made before custom ports existed use 443/80 and no relay role.
+  IG_HTTPS_PORT="$(env_get "$IG_INSTALLER_ENV" HTTPS_PORT)"
+  IG_HTTPS_PORT="${IG_HTTPS_PORT:-443}"
+  IG_HTTP_BIND="$(env_get "$IG_INSTALLER_ENV" HTTP_BIND)"
+  IG_HTTP_BIND="${IG_HTTP_BIND:-80}"
+  IG_RELAY_ROLE="$(env_get "$IG_INSTALLER_ENV" RELAY_ROLE)"
+  IG_ACME_CA="$(env_get "$IG_INSTALLER_ENV" ACME_CA)"
   [[ "$IG_ACCESS_KIND" == domain || "$IG_ACCESS_KIND" == ip ]] || die CONFIG_INVALID 'ACCESS_KIND 无效。'
   [[ "$IG_PROXY_MODE" == bundled || "$IG_PROXY_MODE" == external ]] || die CONFIG_INVALID 'PROXY_MODE 无效。'
   [[ "$IG_APP_PORT" =~ ^[0-9]+$ ]] || die CONFIG_INVALID 'APP_PORT 无效。'
   [[ "${IG_BACKUP_KEEP:-14}" =~ ^[1-9][0-9]*$ ]] || die CONFIG_INVALID 'BACKUP_KEEP 无效。'
+  valid_https_port "$IG_HTTPS_PORT" || die CONFIG_INVALID 'HTTPS_PORT 无效。'
+  [[ "$IG_HTTP_BIND" == 80 || "$IG_HTTP_BIND" =~ ^127\.0\.0\.1:[0-9]+$ ]] || die CONFIG_INVALID 'HTTP_BIND 无效。'
+  [[ -z "$IG_RELAY_ROLE" || "$IG_RELAY_ROLE" =~ ^(holder|member|none)$ ]] || die CONFIG_INVALID 'RELAY_ROLE 无效。'
   IG_BACKUP_KEEP="${IG_BACKUP_KEEP:-14}"
 }
 
@@ -124,11 +138,20 @@ compose_in() {
   files=(-f "$release_dir/compose/compose.yaml")
   if [[ "$IG_PROXY_MODE" == bundled ]]; then
     files+=(-f "$release_dir/compose/compose.https.yaml")
+    # Releases older than custom ports have no relay file; they keep 80/443 as before.
+    if [[ -n "${IG_RELAY_ROLE:-}" && -f "$release_dir/compose/compose.relay.yaml" ]]; then
+      files+=(-f "$release_dir/compose/compose.relay.yaml")
+    fi
+    if [[ -n "${IG_ACME_CA:-}" && -f "$release_dir/compose/compose.acme-ca.yaml" ]]; then
+      files+=(-f "$release_dir/compose/compose.acme-ca.yaml")
+    fi
   else
     files+=(-f "$release_dir/compose/compose.external.yaml")
   fi
   IG_APP_IMAGE="$IG_APP_IMAGE" IG_CADDY_IMAGE="$IG_CADDY_IMAGE" IG_CONFIG_DIR="$IG_CONFIG_DIR" \
-    IG_APP_PORT="$IG_APP_PORT" docker compose -p "$IG_PROJECT" "${files[@]}" "$@"
+    IG_APP_PORT="$IG_APP_PORT" IG_HTTPS_PORT="${IG_HTTPS_PORT:-443}" IG_HTTP_BIND="${IG_HTTP_BIND:-80}" \
+    IG_RELAY_ROLE="${IG_RELAY_ROLE:-}" IG_RELAY_ALIAS="$(relay_alias "${IG_ACCESS_HOST:-}")" \
+    IG_ACME_CA_ROOT_FILE="$IG_ACME_CA_ROOT_FILE" docker compose -p "$IG_PROJECT" "${files[@]}" "$@"
 }
 compose() { compose_in "$IG_CURRENT" "$@"; }
 
@@ -144,7 +167,7 @@ ensure_image() {
   local image="$1"
   docker image inspect "$image" >/dev/null 2>&1 && return 0
   say "下载镜像 $image ..."
-  docker pull --quiet "$image" >/dev/null || die IMAGE_PULL_FAILED "无法下载镜像 $image，请检查网络。"
+  docker pull --quiet "$image" >/dev/null || die IMAGE_PULL_FAILED "无法下载镜像 ${image}，请检查网络。"
 }
 
 container_healthy() {
@@ -161,13 +184,20 @@ container_healthy() {
 
 app_healthy() { container_healthy "$(compose_in "${1:-$IG_CURRENT}" ps -q app 2>/dev/null)"; }
 
+# Public origin used for links, the exact Origin/CSRF check and cookies: the port is part of
+# the origin unless it is the standard 443.
+public_origin() {
+  local host="$1" port="${2:-443}"
+  if [[ "$port" == 443 ]]; then printf 'https://%s' "$host"; else printf 'https://%s:%s' "$host" "$port"; fi
+}
+
 # End-to-end check through the public entry point configured for this installation.
 entry_healthy() {
-  local url
+  local url port="${IG_HTTPS_PORT:-443}"
   if [[ "$IG_PROXY_MODE" == bundled ]]; then
-    url="https://$IG_ACCESS_HOST/health"
+    url="$(public_origin "$IG_ACCESS_HOST" "$port")/health"
     for _ in $(seq 1 30); do
-      curl -fsS --max-time 5 -k --connect-to "$IG_ACCESS_HOST:443:127.0.0.1:443" "$url" >/dev/null 2>&1 && return 0
+      curl -fsS --max-time 5 -k --connect-to "$IG_ACCESS_HOST:$port:127.0.0.1:$port" "$url" >/dev/null 2>&1 && return 0
       sleep 2
     done
     return 1
@@ -188,13 +218,123 @@ port_in_use() {
 
 free_loopback_port() {
   local port
-  for port in $(seq "${1:-3001}" 3099); do
-    port_in_use "$port" || {
+  for port in $(seq "${1:-3001}" "${2:-3099}"); do
+    port_in_use "$port" || host_port_published "$port" || {
       printf '%s' "$port"
       return 0
     }
   done
   return 1
+}
+
+# 443, or an unprivileged port. 80 stays reserved for HTTP and certificate validation.
+valid_https_port() {
+  [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] && { [[ "$1" == 443 ]] || ((10#$1 >= 1024 && 10#$1 <= 65535)); }
+}
+
+# A port Docker publishes may be invisible to ss when the userland proxy is disabled.
+host_port_published() {
+  docker ps --format '{{.Ports}}' 2>/dev/null | grep -Eq "(^|[ ,])[^ ,]*:$1->"
+}
+
+# Busy when any process listens on the TCP or UDP port or a container publishes it.
+host_port_busy() {
+  ss -H -ltnu "( sport = :$1 )" 2>/dev/null | grep -q . || host_port_published "$1"
+}
+
+# Human readable owner of a port: container names first, otherwise the process name.
+port_owner() {
+  local port="$1" owner
+  owner="$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null |
+    awk -v p=":$port->" 'index($0, p) { printf "%s容器 %s", sep, $1; sep = "、" }')"
+  [[ -n "$owner" ]] || owner="$(ss -H -ltnup "( sport = :$port )" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -n 1 | cut -d'"' -f2)"
+  printf '%s' "${owner:-未知程序}"
+}
+
+# Container that publishes host port $1 (first match), empty when none.
+port_container() {
+  docker ps --format '{{.ID}} {{.Ports}}' 2>/dev/null | awk -v p=":$1->" '
+    { n = split($0, f, /[ ,]+/); for (i = 2; i <= n; i++) if (index(f[i], p) && f[i] !~ /^127\./) { print $1; exit } }'
+}
+
+own_container() {
+  [[ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$1" 2>/dev/null)" == "$IG_PROJECT" ]]
+}
+
+relay_alias() {
+  [[ -n "$1" ]] && printf '%s.acme-relay.invalid' "$1"
+  return 0
+}
+
+# Decides how this installation gets certificates when other projects share the server:
+#   holder  host port 80 is free (or already ours): publish 80, answer HTTP-01 and relay the
+#           challenges of other projects' hostnames to them
+#   member  port 80 belongs to another project's proxy labelled oss.https-relay=holder: its
+#           relay forwards our HTTP-01 challenges (domain installs only)
+#   none    port 80 belongs to an unrelated program: no HTTP-01; TLS-ALPN-01 only on 443
+# Sets IG_RELAY_ROLE, IG_HTTP_BIND and IG_PORT80_OWNER.
+decide_relay_role() {
+  local container
+  IG_PORT80_OWNER=''
+  container="$(port_container 80)"
+  if [[ -n "$container" ]] && own_container "$container"; then
+    IG_RELAY_ROLE=holder
+  elif [[ -z "$container" ]] && ! host_port_busy 80; then
+    IG_RELAY_ROLE=holder
+  elif [[ -n "$container" && "$IG_ACCESS_KIND" == domain &&
+    "$(docker inspect --format '{{index .Config.Labels "oss.https-relay"}}' "$container" 2>/dev/null)" == holder ]]; then
+    IG_RELAY_ROLE=member
+    IG_PORT80_OWNER="$(port_owner 80)"
+  else
+    IG_RELAY_ROLE=none
+    IG_PORT80_OWNER="$(port_owner 80)"
+  fi
+  if [[ "$IG_RELAY_ROLE" == holder ]]; then
+    IG_HTTP_BIND=80
+  else
+    # Caddy still listens on container port 80 for relayed challenges; publish it on loopback only.
+    IG_HTTP_BIND="127.0.0.1:$(free_loopback_port 18080 18179)" || die NO_FREE_PORT '127.0.0.1:18080-18179 没有空闲端口。'
+  fi
+}
+
+ensure_relay_network() {
+  docker network inspect "$IG_RELAY_NETWORK" >/dev/null 2>&1 ||
+    docker network create --label oss.https-relay=1 "$IG_RELAY_NETWORK" >/dev/null 2>&1 ||
+    docker network inspect "$IG_RELAY_NETWORK" >/dev/null 2>&1 ||
+    die RELAY_NETWORK_FAILED "无法创建共享网络 ${IG_RELAY_NETWORK}。"
+}
+
+# Issuer of the certificate served on the local HTTPS port (empty when none is served yet).
+served_certificate() {
+  local host="$1" port="$2" sni=(-servername "$host")
+  [[ "$IG_ACCESS_KIND" == ip ]] && sni=()
+  openssl s_client -connect "127.0.0.1:$port" "${sni[@]}" </dev/null 2>/dev/null |
+    openssl x509 -noout -issuer -enddate 2>/dev/null || true
+}
+
+# Waits for a certificate and reports honestly which kind is served. Returns 0 only for a
+# certificate from an ACME CA; 2 for Caddy's local CA; 1 when nothing is served yet.
+report_certificate() {
+  local wait="${1:-0}" certificate='' deadline
+  deadline=$(($(date +%s) + wait))
+  while true; do
+    certificate="$(served_certificate "$IG_ACCESS_HOST" "${IG_HTTPS_PORT:-443}")"
+    if [[ -n "$certificate" && "$certificate" != *'Caddy Local Authority'* ]]; then break; fi
+    [[ -n "$certificate" && "${IG_TLS_ISSUER:-auto}" == internal ]] && break
+    (($(date +%s) < deadline)) || break
+    sleep 5
+  done
+  if [[ -z "$certificate" ]]; then
+    say '证书状态：尚未获得证书（仍在申请中或申请失败）。'
+    return 1
+  fi
+  say "证书签发者：$(printf '%s\n' "$certificate" | sed -n 's/^issuer=//p' | sed 's/^ *//')"
+  say "证书到期：$(printf '%s\n' "$certificate" | sed -n 's/^notAfter=//p')"
+  if [[ "$certificate" == *'Caddy Local Authority'* ]]; then
+    say '证书状态：本机 CA 证书（浏览器默认不信任）。'
+    return 2
+  fi
+  say '证书状态：已获得 ACME 证书，Caddy 会在到期前自动续期。'
 }
 
 # Runs a short-lived helper container from the application image against the data volume.

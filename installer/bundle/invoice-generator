@@ -21,7 +21,8 @@ usage() {
   restore <备份文件>    从备份恢复（恢复前自动再备份一次当前数据）
   upgrade [版本]        升级到最新或指定版本（先备份并验证，失败自动回滚）
   logs [app|caddy] [-f] 查看日志
-  https                 查看 HTTPS 证书信息
+  https [--apply]       查看 HTTPS 证书信息；--apply 按当前服务器情况重新配置
+                        证书验证方式（例如加入同一服务器多项目共用的 80 端口转发）
   reset-admin-password  重置管理员密码
   version               显示版本
 EOF
@@ -43,9 +44,9 @@ cmd_status() {
   load_settings
   load_release "$IG_CURRENT"
   say "版本：$IG_VERSION"
-  say "访问地址：https://$IG_ACCESS_HOST"
+  say "访问地址：$(public_origin "$IG_ACCESS_HOST" "$IG_HTTPS_PORT")"
   if [[ "$IG_PROXY_MODE" == bundled ]]; then
-    say 'HTTPS：内置 Caddy'
+    say "HTTPS：内置 Caddy，端口 ${IG_HTTPS_PORT}（证书验证：$(relay_role_text)）"
   else
     say "HTTPS：已有反向代理 → 127.0.0.1:$IG_APP_PORT"
   fi
@@ -62,7 +63,7 @@ cmd_doctor() {
   local file mode
   for file in "$IG_APP_ENV" "$IG_INSTALLER_ENV"; do
     mode="$(stat -c '%a' "$file" 2>/dev/null || true)"
-    [[ "$mode" == 600 ]] && ok "配置文件权限 0600：$file" || bad "配置文件权限应为 0600：$file（当前 ${mode:-缺失}）"
+    [[ "$mode" == 600 ]] && ok "配置文件权限 0600：$file" || bad "配置文件权限应为 0600：${file}（当前 ${mode:-缺失}）"
   done
   docker image inspect "$IG_APP_IMAGE" >/dev/null 2>&1 && ok '应用镜像已就绪' || bad "缺少应用镜像 $IG_APP_IMAGE"
   app_healthy && ok '应用容器运行正常' || bad '应用容器未运行或健康检查失败'
@@ -71,6 +72,17 @@ cmd_doctor() {
       ok 'HTTPS 代理运行中' || bad 'HTTPS 代理未运行'
   fi
   entry_healthy && ok '访问入口可用' || bad '访问入口检查失败'
+  if [[ "$IG_PROXY_MODE" == bundled ]]; then
+    case "$IG_RELAY_ROLE" in
+      '') attention '安装于自定义端口功能之前：运行 invoice-generator https --apply 可为同一服务器上的其他项目转发证书验证' ;;
+      member)
+        local holder
+        holder="$(port_container 80)"
+        [[ -n "$holder" && "$(docker inspect --format '{{index .Config.Labels "oss.https-relay"}}' "$holder" 2>/dev/null)" == holder ]] &&
+          ok '80 端口证书验证转发可用' || bad '80 端口不再由支持转发的项目提供，证书将无法续期；运行 invoice-generator https --apply 重新配置'
+        ;;
+    esac
+  fi
   local free
   free="$(df -Pk "$IG_ROOT" | awk 'NR==2 {print int($4/1024)}')"
   ((free >= 2048)) && ok "磁盘剩余 ${free} MB" || bad "磁盘剩余空间不足：${free} MB"
@@ -127,6 +139,7 @@ stop_services() {
 
 start_services() {
   local release_dir="${1:-$IG_CURRENT}"
+  [[ "$IG_PROXY_MODE" != bundled || -z "$IG_RELAY_ROLE" ]] || ensure_relay_network
   quietly compose_in "$release_dir" up -d --remove-orphans app || return 1
   app_healthy "$release_dir" || return 1
   if [[ "$IG_PROXY_MODE" == bundled ]]; then
@@ -182,7 +195,7 @@ cmd_restore() {
   database="$(unpack_backup "$pre" "$work")"
   replace_database "$IG_APP_IMAGE" "$database" && start_services ||
     die RESTORE_ROLLBACK_FAILED "还原失败，请联系管理员。恢复前备份：$pre"
-  die RESTORE_FAILED "恢复失败，已还原到恢复前的数据（$pre）。"
+  die RESTORE_FAILED "恢复失败，已还原到恢复前的数据（${pre}）。"
 }
 
 # Fetches and verifies a release bundle; prints the extracted bundle directory.
@@ -260,11 +273,11 @@ cmd_upgrade() {
   load_release "$bundle"
   new_version="$IG_VERSION"
   if [[ "$new_version" == "$old_version" ]]; then
-    say "已是最新版本 $old_version。"
+    say "已是最新版本 ${old_version}。"
     return 0
   fi
   [[ "$(printf '%s\n%s\n' "$old_version" "$new_version" | sort -V | tail -n 1)" == "$new_version" ]] ||
-    die DOWNGRADE_REFUSED "不支持降级：当前 $old_version，目标 $new_version。"
+    die DOWNGRADE_REFUSED "不支持降级：当前 ${old_version}，目标 ${new_version}。"
   say "升级：$old_version → $new_version"
   confirm_phrase UPGRADE '升级前会自动备份并在隔离环境中验证新版本。'
   app_healthy "$old_dir" || die APP_UNHEALTHY '当前应用不健康，请先运行 invoice-generator doctor 处理后再升级。'
@@ -301,7 +314,7 @@ cmd_upgrade() {
     set_env_value "$IG_INSTALLER_ENV" INSTALLED_VERSION "$new_version"
     refresh_schedule
     prune_releases
-    say "升级完成：$new_version。升级前备份：$final"
+    say "升级完成：${new_version}。升级前备份：$final"
     return 0
   fi
 
@@ -316,9 +329,9 @@ cmd_upgrade() {
   mv -Tf -- "$IG_CURRENT.new" "$IG_CURRENT"
   database="$(unpack_backup "$final" "$work")"
   if replace_database "$old_app_image" "$database" && start_services "$old_dir"; then
-    die UPGRADE_ROLLED_BACK "升级失败，已回滚到 $old_version 并恢复升级前数据（$final）。新版本运行期间如有新增业务数据，已保存在 $failed，需要人工核对补录。"
+    die UPGRADE_ROLLED_BACK "升级失败，已回滚到 $old_version 并恢复升级前数据（${final}）。新版本运行期间如有新增业务数据，已保存在 ${failed}，需要人工核对补录。"
   fi
-  die UPGRADE_ROLLBACK_FAILED "升级失败且回滚未完成，请勿删除任何数据。升级前备份：$final；新版本数据库：$failed"
+  die UPGRADE_ROLLBACK_FAILED "升级失败且回滚未完成，请勿删除任何数据。升级前备份：${final}；新版本数据库：$failed"
 }
 
 refresh_schedule() {
@@ -353,30 +366,64 @@ cmd_logs() {
   compose logs --tail 200 "${follow[@]}" "$service"
 }
 
+relay_role_text() {
+  case "$IG_RELAY_ROLE" in
+    holder) printf '本项目占用 80 端口，并为其他项目转发' ;;
+    member) printf '由占用 80 端口的项目转发' ;;
+    none) [[ "$IG_HTTPS_PORT" == 443 ]] && printf '仅 443 端口 TLS-ALPN' || printf '本机 CA' ;;
+    *) printf '80/443 端口' ;;
+  esac
+}
+
 cmd_https() {
+  local apply=0 status=0
+  [[ "${1:-}" == --apply ]] && apply=1
   load_settings
-  say "访问地址：https://$IG_ACCESS_HOST"
   if [[ "$IG_PROXY_MODE" == external ]]; then
-    say "HTTPS 由现有反向代理提供，应用监听 127.0.0.1:$IG_APP_PORT。示例配置：$IG_PROXY_DIR"
+    say "访问地址：https://$IG_ACCESS_HOST"
+    say "HTTPS 由现有反向代理提供，应用监听 127.0.0.1:${IG_APP_PORT}。示例配置：$IG_PROXY_DIR"
     return 0
   fi
-  local certificate
-  certificate="$(openssl s_client -connect 127.0.0.1:443 -servername "$IG_ACCESS_HOST" </dev/null 2>/dev/null |
-    openssl x509 -noout -issuer -enddate 2>/dev/null || true)"
-  if [[ -z "$certificate" ]]; then
-    say '暂未获取到证书，可能仍在申请中。'
-    return 1
+  if [[ "$apply" == 1 ]]; then
+    https_apply
+    return
   fi
-  say "$certificate"
-  if [[ "$certificate" == *'Caddy Local Authority'* ]]; then
+  say "访问地址：$(public_origin "$IG_ACCESS_HOST" "$IG_HTTPS_PORT")"
+  say "证书验证：$(relay_role_text)"
+  report_certificate 0 || status=$?
+  if [[ "$status" -eq 2 ]]; then
     local root
     if root="$(export_local_ca)"; then
       say ''
-      say "当前使用本机 CA 证书。根证书已导出：$root"
+      say "根证书已导出：$root"
       say "SHA-256 指纹：$(openssl x509 -in "$root" -noout -fingerprint -sha256 | cut -d= -f2)"
       say '把该根证书导入电脑的“受信任的根证书”后即可安全访问；请先核对指纹。'
     fi
+    return 0
   fi
+  return "$status"
+}
+
+# Re-decides the certificate validation path for the current server (for example after another
+# project was installed, or for installations made before custom ports) and recreates only this
+# project's Caddy. The HTTPS port, access address, data and certificates are kept.
+https_apply() {
+  with_lock
+  local before="${IG_RELAY_ROLE:-}"
+  decide_relay_role
+  if [[ "$IG_RELAY_ROLE" == none && "$IG_HTTPS_PORT" != 443 && "$IG_TLS_ISSUER" != internal ]]; then
+    die ACME_HTTP_PORT_UNAVAILABLE "80 端口被其他程序占用（${IG_PORT80_OWNER}），端口 $IG_HTTPS_PORT 无法自动申请受信任证书；配置未修改。"
+  fi
+  [[ -f "$IG_CURRENT/compose/compose.relay.yaml" ]] || die RELEASE_TOO_OLD '当前版本不支持该操作，请先升级。'
+  write_caddyfile
+  ensure_relay_network
+  quietly compose up -d --force-recreate --no-deps caddy || {
+    die HTTPS_APPLY_FAILED 'Caddy 重新创建失败，请运行 invoice-generator logs caddy 查看。'
+  }
+  set_env_value "$IG_INSTALLER_ENV" RELAY_ROLE "$IG_RELAY_ROLE"
+  set_env_value "$IG_INSTALLER_ENV" HTTP_BIND "$IG_HTTP_BIND"
+  say "证书验证方式：${before:-80/443 端口} → $(relay_role_text)"
+  entry_healthy && say "访问入口可用：$(public_origin "$IG_ACCESS_HOST" "$IG_HTTPS_PORT")" || warn 'HTTPS 入口暂未就绪，稍后运行 invoice-generator https 查看。'
 }
 
 cmd_reset_admin_password() {
@@ -424,7 +471,7 @@ main() {
     restore) cmd_restore "$@" ;;
     upgrade | update) cmd_upgrade "$@" ;;
     logs) cmd_logs "$@" ;;
-    https) cmd_https ;;
+    https) cmd_https "$@" ;;
     reset-admin-password) cmd_reset_admin_password ;;
     version | --version) cmd_version ;;
     help | -h | --help) usage ;;

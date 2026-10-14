@@ -43,17 +43,18 @@ curl -fsSL https://github.com/cobrander-dev/invoice-generator-oss/releases/lates
 
 1. 检测系统；未安装 Docker 时询问后从 Docker 官方源安装（先核对官方 GPG 密钥指纹）。
 2. 下载安装包，并用 `install.sh` 内嵌的 SHA-256 校验；安装包内每个文件再按清单校验，镜像按 digest 固定。
-3. 输入访问地址：**有域名填域名，没有域名直接回车使用服务器公网 IP**。
+3. 输入访问地址：**有域名填域名，没有域名直接回车使用服务器公网 IP**；再选择 HTTPS 端口（直接回车使用 443，同一服务器安装多个项目时可用 8443 等其他端口）。
 4. 自动生成安全密钥，启动服务，创建管理员（密码隐藏输入）。
 5. 启用每日自动备份，安装 `invoice-generator` 管理命令。
 
-推荐 2 vCPU / 2 GiB 内存 / 20 GiB 磁盘。云服务器请在安全组放行 TCP 80 和 443。再次运行 `install.sh` 会打开管理菜单，不会覆盖已有安装。
+推荐 2 vCPU / 2 GiB 内存 / 20 GiB 磁盘。云服务器请在安全组放行 TCP 80 和所选 HTTPS 端口。再次运行 `install.sh` 会打开管理菜单，不会覆盖已有安装。
 
 | 场景 | HTTPS |
 | --- | --- |
 | 有域名，80/443 空闲 | 内置 Caddy 自动申请并续期证书 |
+| 自定义 HTTPS 端口（如 8443） | 80 端口空闲或由同一服务器上的另一个 OSS 项目占用时自动申请并续期证书；80 被无关程序占用时明确提示，只能选择本机 CA 证书或已有反向代理。详见 [docs/HTTPS_PORTS.md](docs/HTTPS_PORTS.md) |
 | 无域名，使用公网 IP | 优先申请 Let's Encrypt 短期 IP 证书并自动续期；失败时使用本机 CA 证书，`invoice-generator https` 可导出根证书及指纹 |
-| 80/443 已被 Nginx / Caddy 占用 | 应用只监听 `127.0.0.1:3001`，在 `/opt/invoice-generator/proxy` 生成 Nginx 和 Caddy 配置示例；检测到运行中的宿主机 Caddy 时可自动添加站点（先校验并备份原配置，失败自动恢复） |
+| 已有 Nginx / Caddy 提供 HTTPS（向导中输入 `p`） | 应用只监听 `127.0.0.1:3001`，在 `/opt/invoice-generator/proxy` 生成 Nginx 和 Caddy 配置示例；检测到运行中的宿主机 Caddy 时可自动添加站点（先校验并备份原配置，失败自动恢复） |
 
 安装只使用名为 `invoice-generator` 的 Docker Compose 项目、`/opt/invoice-generator` 目录和 `invoice-generator_*` 数据卷。若检测到同名但不是本程序创建的项目或数据卷，安装会停止，不会覆盖。
 

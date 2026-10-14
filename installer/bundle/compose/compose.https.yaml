@@ -1,4 +1,6 @@
-# Bundled HTTPS entry point: Caddy owns ports 80/443 and proxies to the app.
+# Bundled HTTPS entry point: Caddy proxies to the app. The defaults (80/443) are the original
+# layout; installs with a custom HTTPS port, or whose port 80 belongs to another project, set
+# IG_HTTPS_PORT and IG_HTTP_BIND (a loopback address). Caddy listens on 80/443 in the container.
 services:
   caddy:
     image: ${IG_CADDY_IMAGE:?IG_CADDY_IMAGE is required}
@@ -6,9 +8,9 @@ services:
       app:
         condition: service_healthy
     ports:
-      - '80:80'
-      - '443:443'
-      - '443:443/udp'
+      - '${IG_HTTP_BIND:-80}:80'
+      - '${IG_HTTPS_PORT:-443}:443'
+      - '${IG_HTTPS_PORT:-443}:443/udp'
     volumes:
       - ${IG_CONFIG_DIR:?IG_CONFIG_DIR is required}/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

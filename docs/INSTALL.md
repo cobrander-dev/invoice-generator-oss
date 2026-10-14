@@ -2,10 +2,10 @@
 
 ## 准备
 
-- 一台 Ubuntu 22.04 / 24.04 / 26.04 或 Debian 12 / 13 服务器，x86_64 或 arm64，推荐 2 vCPU / 2 GiB 内存 / 20 GiB 磁盘。
+- 一台 Linux 服务器，x86_64 或 arm64，推荐 2 vCPU / 2 GiB 内存 / 20 GiB 磁盘。可自动安装 Docker 的系统：Ubuntu 22.04 / 24.04 / 26.04、Debian 12 / 13 及其衍生版，Fedora、RHEL / Rocky Linux / AlmaLinux 9 / 10。其他系统需先自行安装 Docker Engine 与 Compose 插件。
 - root 或 sudo 权限，能通过 SSH 登录。
 - 使用域名时：域名的 A 记录已指向服务器公网 IP。
-- 云服务器安全组与 `ufw` 等防火墙放行 TCP 80 和 443（使用内置 HTTPS 时）。
+- 云服务器安全组与 `ufw`/`firewalld` 等防火墙放行 TCP 80 和所选 HTTPS 端口（默认 443，使用内置 HTTPS 时）。
 
 ## 安装
 
@@ -15,7 +15,11 @@ curl -fsSL https://github.com/cobrander-dev/invoice-generator-oss/releases/lates
 
 `&&` 保证只有完整下载成功才会运行安装脚本；安装脚本再用内嵌的 SHA-256 校验安装包。非 root 用户运行时会自动通过 sudo 重新执行。安装指定版本：把 `latest/download` 换成 `download/v1.2.3`。
 
-安装向导会询问访问地址和管理员账号。安装完成后用浏览器打开 `https://你的域名或IP`，用刚创建的管理员登录。
+安装向导会询问访问地址、HTTPS 端口（默认 443）和管理员账号。安装完成后用浏览器打开 `https://你的域名或IP`（自定义端口时为 `https://你的域名或IP:端口`），用刚创建的管理员登录。
+
+### 自定义 HTTPS 端口（同一服务器安装多个项目）
+
+在“HTTPS 端口”一步输入例如 `8443`。证书申请方式、80 端口的共享、防火墙与 Cookie 注意事项见 [HTTPS_PORTS.md](HTTPS_PORTS.md)。
 
 ### 使用公网 IP（没有域名）
 
@@ -29,7 +33,7 @@ sudo invoice-generator https
 
 ### 服务器已有 Nginx 或 Caddy
 
-如果 80 或 443 端口已被占用，程序不会改动现有服务，而是：
+在“HTTPS 端口”一步输入 `p`，或无人值守安装时 443 已被占用且未指定端口，程序不会改动现有服务，而是：
 
 - 让 Invoice Generator 只监听 `127.0.0.1:3001`（若被占用则自动选择 3002–3099）；
 - 在 `/opt/invoice-generator/proxy/` 生成 `nginx-invoice-generator.conf` 和 `Caddyfile-invoice-generator` 示例；
@@ -90,6 +94,9 @@ sudo invoice-generator upgrade v1.2.3   # 指定版本
 | `RELEASE_CHECKSUM_MISMATCH` | 安装包校验失败，请重新下载 |
 | `PROJECT_EXISTS` | 已有同名 Docker 项目或数据卷且不是本程序创建的，为避免覆盖已停止 |
 | `ACCESS_HOST_INVALID` | 域名格式无效，或 IP 不是公网 IPv4 |
+| `HTTPS_PORT_IN_USE` | 所选 HTTPS 端口已被其他程序占用，未做任何更改；请换一个端口 |
+| `HTTPS_PORT_INVALID` | HTTPS 端口需为 443 或 1024–65535 |
+| `ACME_HTTP_PORT_UNAVAILABLE` | 80 端口被无关程序占用，自定义端口无法自动申请受信任证书，见 [HTTPS_PORTS.md](HTTPS_PORTS.md) |
 | `APP_UNHEALTHY` | 应用未通过健康检查，运行 `invoice-generator logs` 查看 |
 | `BACKUP_CHECKSUM_MISMATCH` / `BACKUP_INVALID` | 备份文件损坏或被修改，未做任何更改 |
 | `BACKUP_SCHEMA_TOO_NEW` | 备份来自更新的版本，请先升级 |

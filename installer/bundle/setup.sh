@@ -3,8 +3,9 @@
 #
 # Non-interactive answers (isolated tests and automation):
 #   IG_NONINTERACTIVE=1 IG_ACCESS_HOST=<domain|public IPv4> IG_ADMIN_USERNAME=<name>
-#   IG_ADMIN_PASSWORD_FILE=<file> [IG_PROXY_MODE=auto|bundled|external]
-#   [IG_HOST_CADDY=yes|no] [IG_TLS_ISSUER=auto|internal]
+#   IG_ADMIN_PASSWORD_FILE=<file> [IG_HTTPS_PORT=443|1024-65535]
+#   [IG_PROXY_MODE=auto|bundled|external] [IG_HOST_CADDY=yes|no] [IG_TLS_ISSUER=auto|internal]
+#   [IG_ACME_CA=<https ACME directory> IG_ACME_CA_ROOT=<PEM file>]  (private ACME CA, tests)
 set -Eeuo pipefail
 umask 077
 
@@ -90,28 +91,111 @@ choose_access_host() {
   done
 }
 
-choose_proxy_mode() {
+# Asks for the public HTTPS port (default 443). A busy port is never taken over: the user picks
+# another one or the existing-proxy mode. Sets IG_HTTPS_PORT and IG_PROXY_MODE.
+choose_https_port() {
+  local port="${IG_HTTPS_PORT:-}" explicit=0 container
   IG_PROXY_MODE="${IG_PROXY_MODE:-auto}"
-  IG_HOST_CADDY_SITE=no
-  if [[ "$IG_PROXY_MODE" == auto ]]; then
-    # Ports held by this installation's own Caddy (resumed setup) are not a conflict.
-    if [[ -n "$(docker ps -q --filter "label=com.docker.compose.project=$IG_PROJECT" --filter label=com.docker.compose.service=caddy)" ]]; then
-      IG_PROXY_MODE=bundled
-    elif port_in_use 80 || port_in_use 443; then
-      IG_PROXY_MODE=external
-    else
-      IG_PROXY_MODE=bundled
+  [[ "$IG_PROXY_MODE" =~ ^(auto|bundled|external)$ ]] || die CONFIG_INVALID 'IG_PROXY_MODE 无效。'
+  [[ -n "$port" ]] && explicit=1
+  [[ "$IG_PROXY_MODE" == external ]] && return 0
+  while true; do
+    if [[ -z "$port" ]]; then
+      if interactive; then
+        say ''
+        say '请选择 HTTPS 端口：'
+        note '直接回车使用 443（标准端口，访问地址不带端口号）'
+        note '同一台服务器安装多个项目时，可输入其他端口，例如 8443、9443'
+        note '输入 p：改用服务器上已有的反向代理（Nginx/Caddy）提供 HTTPS'
+        port="$(ask 'HTTPS 端口 [443]: ')"
+        port="${port:-443}"
+      else
+        port=443
+      fi
     fi
-  fi
-  [[ "$IG_PROXY_MODE" == bundled || "$IG_PROXY_MODE" == external ]] || die CONFIG_INVALID 'IG_PROXY_MODE 无效。'
-  if [[ "$IG_PROXY_MODE" == bundled ]]; then
-    IG_APP_PORT=3001
+    if [[ "$port" == p || "$port" == P ]]; then
+      IG_PROXY_MODE=external
+      return 0
+    fi
+    if ! valid_https_port "$port"; then
+      interactive || die HTTPS_PORT_INVALID "无效的 HTTPS 端口：${port}（可用 443 或 1024-65535；80 保留给 HTTP 和证书验证）。"
+      say "无效的端口：${port}（可用 443 或 1024-65535；80 保留给 HTTP 和证书验证）。"
+      port=''
+      continue
+    fi
+    port=$((10#$port))
+    # A resumed setup may already run this installation's own Caddy on that port.
+    if host_port_busy "$port" && ! { container="$(port_container "$port")" && [[ -n "$container" ]] && own_container "$container"; }; then
+      if ! interactive; then
+        # Original unattended behaviour: no port requested and 443 taken -> existing proxy.
+        if [[ "$explicit" == 0 && "$IG_PROXY_MODE" == auto ]]; then
+          IG_PROXY_MODE=external
+          return 0
+        fi
+        die HTTPS_PORT_IN_USE "端口 $port 已被占用（$(port_owner "$port")）。不会停止或修改占用它的程序，请换一个端口，例如 IG_HTTPS_PORT=8443。"
+      fi
+      say "端口 $port 已被占用（$(port_owner "$port")）。不会停止或修改占用它的程序，请换一个端口。"
+      port=''
+      continue
+    fi
+    IG_HTTPS_PORT="$port"
+    IG_PROXY_MODE=bundled
     return 0
+  done
+}
+
+# Decides how the certificate is obtained and refuses to pretend when it cannot be.
+choose_certificate_plan() {
+  local choice
+  IG_TLS_ISSUER="${IG_TLS_ISSUER:-auto}"
+  [[ "$IG_TLS_ISSUER" == auto || "$IG_TLS_ISSUER" == internal ]] || die CONFIG_INVALID 'IG_TLS_ISSUER 无效。'
+  IG_ACME_CA="${IG_ACME_CA:-}"
+  if [[ -n "$IG_ACME_CA" ]]; then
+    [[ "$IG_ACME_CA" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$ ]] || die CONFIG_INVALID 'IG_ACME_CA 无效。'
+    [[ -f "${IG_ACME_CA_ROOT:-}" ]] || die CONFIG_INVALID 'IG_ACME_CA 需要 IG_ACME_CA_ROOT（PEM 根证书文件）。'
   fi
+  decide_relay_role
+  say ''
+  case "$IG_RELAY_ROLE" in
+    holder)
+      note "80 端口空闲：本项目使用 80 端口完成证书验证（HTTP-01），并为同一服务器上的其他项目转发验证请求"
+      ;;
+    member)
+      note "80 端口由同一服务器上的另一个项目（${IG_PORT80_OWNER}）提供，证书验证请求由它转发到本项目"
+      ;;
+    none)
+      if [[ "$IG_HTTPS_PORT" == 443 ]]; then
+        note "80 端口被其他程序占用（${IG_PORT80_OWNER}），将只通过 443 端口完成证书验证（TLS-ALPN-01）"
+      elif [[ "$IG_TLS_ISSUER" != internal ]]; then
+        say "无法自动申请受信任的 HTTPS 证书："
+        note "公网证书机构只在 80 端口（HTTP-01）或 443 端口（TLS-ALPN-01）验证域名"
+        note "80 端口已被其他程序占用（${IG_PORT80_OWNER}），本项目使用的是 $IG_HTTPS_PORT 端口"
+        note 'DNS-01 验证需要 DNS 服务商 API 凭据，本安装程序不支持'
+        interactive || die ACME_HTTP_PORT_UNAVAILABLE "80 端口被其他程序占用（${IG_PORT80_OWNER}），自定义端口 $IG_HTTPS_PORT 无法自动申请受信任证书。可改用 IG_HTTPS_PORT=443、IG_PROXY_MODE=external，或明确设置 IG_TLS_ISSUER=internal 使用本机 CA 证书。"
+        say '请选择：'
+        note '1) 使用本机 CA 证书（浏览器会提示不受信任，可导入根证书后使用）'
+        note '2) 改用已有反向代理模式（由占用 80/443 的 Nginx/Caddy 提供 HTTPS）'
+        note '3) 取消安装'
+        choice="$(ask '请输入 1/2/3 [3]: ')"
+        case "$choice" in
+          1) IG_TLS_ISSUER=internal ;;
+          2) IG_PROXY_MODE=external ;;
+          *) die CANCELLED '已取消，没有做任何更改。' ;;
+        esac
+      fi
+      ;;
+  esac
+}
+
+configure_external_proxy() {
+  IG_HOST_CADDY_SITE=no
+  IG_HTTPS_PORT=443
+  IG_RELAY_ROLE=''
+  IG_HTTP_BIND=80
   IG_APP_PORT="$(free_loopback_port 3001)" || die NO_FREE_PORT '127.0.0.1:3001-3099 没有空闲端口。'
   say ''
-  say '检测到 80/443 端口已被其他服务占用（例如 Nginx 或 Caddy），将使用“已有反向代理”模式：'
-  note "Invoice Generator 只监听 127.0.0.1:$IG_APP_PORT，不占用 80/443"
+  say '使用“已有反向代理”模式：'
+  note "Invoice Generator 只监听 127.0.0.1:${IG_APP_PORT}，不占用 80/443"
   note "HTTPS 由你现有的反向代理提供，示例配置会写入 $IG_PROXY_DIR"
   if [[ "$IG_ACCESS_KIND" == domain ]] && detect_existing_host_caddy /etc/caddy/Caddyfile; then
     case "${IG_HOST_CADDY:-ask}" in
@@ -123,6 +207,19 @@ choose_proxy_mode() {
   return 0
 }
 
+choose_proxy_mode() {
+  IG_HOST_CADDY_SITE=no
+  choose_https_port
+  if [[ "$IG_PROXY_MODE" == bundled ]]; then
+    choose_certificate_plan
+  fi
+  if [[ "$IG_PROXY_MODE" == external ]]; then
+    configure_external_proxy
+  else
+    IG_APP_PORT=3001
+  fi
+}
+
 write_configuration() {
   local secret
   install -d -m 0755 "$IG_ROOT"
@@ -130,11 +227,11 @@ write_configuration() {
   install -d -m 0755 "$IG_RELEASES_DIR"
   if [[ -f "$IG_APP_ENV" ]]; then
     note '检测到未完成的安装，保留已有密钥继续。'
-    set_env_value "$IG_APP_ENV" APP_ORIGIN "https://$IG_ACCESS_HOST"
+    set_env_value "$IG_APP_ENV" APP_ORIGIN "$(public_origin "$IG_ACCESS_HOST" "$IG_HTTPS_PORT")"
   else
     secret="$(openssl rand -hex 48)"
     write_env_file "$IG_APP_ENV" \
-      "APP_ORIGIN=https://$IG_ACCESS_HOST" \
+      "APP_ORIGIN=$(public_origin "$IG_ACCESS_HOST" "$IG_HTTPS_PORT")" \
       "SESSION_SECRET=$secret" \
       'PASSWORD_MIN_LENGTH=8' \
       'BUSINESS_BACKUP_LIMIT=64mb'
@@ -142,6 +239,9 @@ write_configuration() {
   fi
   IG_TLS_ISSUER="${IG_TLS_ISSUER:-auto}"
   [[ "$IG_TLS_ISSUER" == auto || "$IG_TLS_ISSUER" == internal ]] || die CONFIG_INVALID 'IG_TLS_ISSUER 无效。'
+  if [[ -n "${IG_ACME_CA:-}" ]]; then
+    install -m 0644 "$IG_ACME_CA_ROOT" "$IG_ACME_CA_ROOT_FILE"
+  fi
 }
 
 install_release() {
@@ -164,6 +264,10 @@ save_installer_settings() {
     "PROXY_MODE=$IG_PROXY_MODE" \
     "APP_PORT=$IG_APP_PORT" \
     "TLS_ISSUER=$IG_TLS_ISSUER" \
+    "HTTPS_PORT=$IG_HTTPS_PORT" \
+    "HTTP_BIND=$IG_HTTP_BIND" \
+    "RELAY_ROLE=${IG_RELAY_ROLE:-}" \
+    "ACME_CA=${IG_ACME_CA:-}" \
     "BACKUP_KEEP=${IG_BACKUP_KEEP:-14}" \
     "INSTALLED_VERSION=$IG_VERSION"
 }
@@ -175,6 +279,7 @@ start_services() {
   step 4 '正在配置服务'
   if [[ "$IG_PROXY_MODE" == bundled ]]; then
     write_caddyfile
+    ensure_relay_network
     quietly compose up -d --remove-orphans app caddy
   else
     write_proxy_examples "$IG_ACCESS_HOST" "$IG_APP_PORT"
@@ -259,13 +364,20 @@ summary() {
   say '========================================'
   say '  Invoice Generator 安装完成'
   say '========================================'
-  say "访问地址：https://$IG_ACCESS_HOST"
+  say "访问地址：$(public_origin "$IG_ACCESS_HOST" "$IG_HTTPS_PORT")"
   if [[ "$IG_PROXY_MODE" == external ]]; then
-    say "应用监听：127.0.0.1:$IG_APP_PORT（由你现有的反向代理提供 HTTPS）"
+    say "应用监听：127.0.0.1:${IG_APP_PORT}（由你现有的反向代理提供 HTTPS）"
     [[ "$IG_HOST_CADDY_SITE" == yes ]] || say "反向代理示例：$IG_PROXY_DIR"
-  elif [[ "$IG_ACCESS_KIND" == ip ]]; then
-    say 'IP 访问会优先申请 Let'"'"'s Encrypt 短期 IP 证书；若申请失败将使用本机 CA 证书，'
-    say '浏览器会提示不受信任，可运行 invoice-generator https 导出根证书后导入。'
+  else
+    local status=0
+    say ''
+    report_certificate "${IG_CERT_WAIT:-90}" || status=$?
+    if [[ "$status" -eq 1 ]]; then
+      note '请确认域名已解析到本服务器，并在防火墙/安全组放行下方端口；Caddy 会自动重试。'
+      note '稍后运行 sudo invoice-generator https 查看证书状态。'
+    elif [[ "$status" -eq 2 ]]; then
+      note '可运行 sudo invoice-generator https 导出根证书并核对指纹后导入电脑。'
+    fi
   fi
   say ''
   say '常用命令：'
@@ -275,10 +387,16 @@ summary() {
   note 'sudo invoice-generator backup   立即备份'
   note 'sudo invoice-generator upgrade  一键升级'
   say ''
-  say "数据备份目录：$IG_BACKUP_DIR（每天自动备份，保留最近 ${IG_BACKUP_KEEP:-14} 份自动备份）"
+  say "数据备份目录：${IG_BACKUP_DIR}（每天自动备份，保留最近 ${IG_BACKUP_KEEP:-14} 份自动备份）"
   say '请定期把备份复制到服务器以外的安全位置。'
   if [[ "$IG_PROXY_MODE" == bundled ]]; then
-    say '云服务器请在安全组中放行 TCP 80 和 443。'
+    if [[ "$IG_RELAY_ROLE" == holder ]]; then
+      say "云服务器请在安全组/防火墙中放行 TCP 80 和 TCP ${IG_HTTPS_PORT}。"
+      [[ "$IG_HTTPS_PORT" == 443 ]] || say '80 端口用于证书验证，并为同一服务器上的其他项目转发证书验证请求，请保持本项目运行。'
+    else
+      say "云服务器请在安全组/防火墙中放行 TCP ${IG_HTTPS_PORT}。"
+    fi
+    [[ "$IG_RELAY_ROLE" != member ]] || say "证书续期依赖占用 80 端口的项目（${IG_PORT80_OWNER}）保持运行。"
   fi
 }
 

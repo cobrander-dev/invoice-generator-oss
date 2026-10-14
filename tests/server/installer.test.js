@@ -71,9 +71,199 @@ test('compose files keep the app private, hardened and log-limited', () => {
     assert.ok(app.includes(token), token);
   assert.match(external, /'127\.0\.0\.1:\$\{IG_APP_PORT/);
   assert.doesNotMatch(external, /0\.0\.0\.0/);
-  assert.match(https, /'80:80'/);
-  assert.match(https, /'443:443'/);
+  // Defaults keep the original 80/443 layout for CLIs from before custom ports.
+  assert.match(https, /'\$\{IG_HTTP_BIND:-80\}:80'/);
+  assert.match(https, /'\$\{IG_HTTPS_PORT:-443\}:443'/);
   assert.match(https, /condition: service_healthy/);
+  const relay = read('installer/bundle/compose/compose.relay.yaml');
+  assert.match(relay, /name: oss-https-relay\n\s+external: true/);
+  assert.match(relay, /oss\.https-relay: \$\{IG_RELAY_ROLE/);
+  assert.match(relay, /- \$\{IG_RELAY_ALIAS/);
+});
+
+test('legacy installations render the exact Caddyfile they had before custom ports', () => {
+  const legacy = bash(`${lib} render_caddyfile domain invoice.example.com auto 443 ''`).stdout;
+  assert.equal(legacy, bash(`${lib} render_caddyfile domain invoice.example.com`).stdout);
+  assert.doesNotMatch(legacy, /auto_https|acme-relay|protocols|tls \{/);
+});
+
+test('custom HTTPS ports keep the port in redirects and use only challenges that can work', () => {
+  const holder = bash(`${lib} render_caddyfile domain invoice.example.com auto 8443 holder`).stdout;
+  assert.match(holder, /auto_https disable_redirects/);
+  assert.match(holder, /issuer acme \{\n\t+disable_tlsalpn_challenge\n/);
+  assert.doesNotMatch(holder, /disable_http_challenge/);
+  assert.match(
+    holder,
+    /http:\/\/invoice\.example\.com \{\n\tredir https:\/\/invoice\.example\.com:8443\{uri\} 308/,
+  );
+  assert.match(holder, /protocols h1 h2/);
+  assert.match(holder, /reverse_proxy \{http\.request\.host\}\.acme-relay\.invalid:80/);
+  assert.match(holder, /@relay not header X-OSS-HTTPS-Relay \*/);
+  assert.match(holder, /header_up X-OSS-HTTPS-Relay 1/);
+
+  const member = bash(`${lib} render_caddyfile domain hub.example.com auto 9443 member`).stdout;
+  assert.match(member, /disable_tlsalpn_challenge/);
+  assert.doesNotMatch(member, /acme-relay|disable_http_challenge/);
+  assert.match(member, /redir https:\/\/hub\.example\.com:9443\{uri\}/);
+
+  const standard = bash(`${lib} render_caddyfile domain a.example.com auto 443 holder`).stdout;
+  assert.doesNotMatch(standard, /disable_tlsalpn_challenge|protocols h1 h2/);
+  assert.match(standard, /redir https:\/\/a\.example\.com\{uri\} 308/);
+
+  // Port 80 owned by an unrelated program: TLS-ALPN-01 on 443 only.
+  const alpn = bash(`${lib} render_caddyfile domain a.example.com auto 443 none`).stdout;
+  assert.match(alpn, /issuer acme \{\n\t+disable_http_challenge\n/);
+  assert.doesNotMatch(alpn, /disable_tlsalpn_challenge/);
+
+  // No challenge can reach this server: never configure an ACME issuer that cannot succeed.
+  const none = bash(`${lib} render_caddyfile domain a.example.com auto 9443 none`).stdout;
+  assert.match(none, /\ttls internal/);
+  assert.doesNotMatch(none, /issuer acme/);
+
+  const ip = bash(`${lib} render_caddyfile ip 203.0.113.10 auto 8443 holder`).stdout;
+  assert.match(ip, /profile shortlived\n\t+disable_tlsalpn_challenge\n\t+\}\n\t+issuer internal/);
+  assert.match(ip, /redir https:\/\/203\.0\.113\.10:8443\{uri\}/);
+
+  const ca = bash(
+    `${lib} render_caddyfile domain a.example.com auto 8443 holder https://pebble:14000/dir`,
+  ).stdout;
+  assert.match(
+    ca,
+    /acme_ca https:\/\/pebble:14000\/dir\n\tacme_ca_root \/etc\/caddy\/acme-ca-root\.pem/,
+  );
+});
+
+test('HTTPS ports: 443 or 1024-65535, origins carry non-standard ports', () => {
+  const valid = (port) => bash(`${lib} valid_https_port "$P"`, { P: port }).status;
+  for (const port of ['443', '1024', '8443', '9443', '65535']) assert.equal(valid(port), 0, port);
+  for (const port of ['80', '0', '22', '1023', '65536', '08443', '8443 ', 'p', '', '-1'])
+    assert.notEqual(valid(port), 0, port);
+  const origin = (port) => bash(`${lib} public_origin a.example.com "$P"`, { P: port }).stdout;
+  assert.equal(origin('443'), 'https://a.example.com');
+  assert.equal(origin('8443'), 'https://a.example.com:8443');
+});
+
+// Stubs for docker and ss: PORTS lists "<id/name> <ports>" lines, LABELS maps id=project:relay-role.
+const stubs = `
+docker() {
+  case "$1 $2" in
+    'ps --format')
+      if [[ "$3" == '{{.Ports}}' ]]; then printf '%b' "$PORTS" | cut -d' ' -f2-; else printf '%b' "$PORTS"; fi ;;
+    'inspect --format')
+      local entry; entry="$(printf '%s' "$LABELS" | tr ' ' '\n' | grep "^$4=" | cut -d= -f2)"
+      if [[ "$3" == *compose.project* ]]; then printf '%s\n' "\${entry%%:*}"; else printf '%s\n' "\${entry#*:}"; fi ;;
+  esac
+}
+ss() { [[ "$*" == *":80 "* && -n "\${SS80:-}" ]] && printf 'LISTEN 0 4096 0.0.0.0:80 0.0.0.0:* users:(("nginx",pid=1,fd=6))\n'; return 0; }
+`;
+const relayRole = (env) =>
+  bash(
+    `${lib} ${stubs} IG_ACCESS_KIND=\${KIND:-domain}; decide_relay_role; printf '%s %s' "$IG_RELAY_ROLE" "$IG_HTTP_BIND"`,
+    env,
+  ).stdout;
+
+test('relay role: free port 80 holds, OSS holders relay, unrelated programs do not', () => {
+  assert.equal(relayRole({ PORTS: '', LABELS: '' }), 'holder 80');
+  assert.equal(
+    relayRole({
+      PORTS: 'abc 0.0.0.0:80->80/tcp, [::]:80->80/tcp\n',
+      LABELS: 'abc=invoice-generator:holder',
+    }),
+    'holder 80',
+  );
+  assert.equal(
+    relayRole({ PORTS: 'def 0.0.0.0:80->80/tcp\n', LABELS: 'def=product-hub-https:holder' }),
+    'member 127.0.0.1:18080',
+  );
+  assert.equal(
+    relayRole({
+      PORTS: 'def 0.0.0.0:80->80/tcp\n',
+      LABELS: 'def=product-hub-https:holder',
+      KIND: 'ip',
+    }),
+    'none 127.0.0.1:18080',
+  );
+  assert.equal(
+    relayRole({ PORTS: 'xyz 0.0.0.0:80->8080/tcp\n', LABELS: 'xyz=other:' }),
+    'none 127.0.0.1:18080',
+  );
+  assert.equal(relayRole({ PORTS: '', LABELS: '', SS80: '1' }), 'none 127.0.0.1:18080');
+  // A loopback-only publication of port 80 is not the public port 80.
+  assert.equal(
+    relayRole({ PORTS: 'abc 127.0.0.1:80->80/tcp\n', LABELS: 'abc=x:' }),
+    'none 127.0.0.1:18080',
+  );
+});
+
+// Loads setup.sh's functions without running the wizard.
+function setupFunctions() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ig-setup-'));
+  fs.symlinkSync(path.join(root, 'installer/bundle/lib'), path.join(directory, 'lib'));
+  fs.writeFileSync(
+    path.join(directory, 'setup.sh'),
+    read('installer/bundle/setup.sh').replace(/\nmain "\$@"\n$/, '\n'),
+  );
+  return directory;
+}
+
+test('setup never takes over a busy HTTPS port and refuses unworkable certificates', () => {
+  const directory = setupFunctions();
+  const run = (script, env) =>
+    bash(`. "${directory}/setup.sh"; ${stubs} ${script}`, {
+      IG_NONINTERACTIVE: '1',
+      PORTS: '',
+      LABELS: '',
+      ...env,
+    });
+  try {
+    const busy = { PORTS: 'n1 0.0.0.0:443->443/tcp, 0.0.0.0:80->80/tcp\n', LABELS: 'n1=nginx:' };
+    let result = run('choose_https_port', { ...busy, IG_HTTPS_PORT: '443' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /HTTPS_PORT_IN_USE/);
+    assert.match(result.stderr, /容器 n1/);
+    result = run('choose_https_port; echo "$IG_PROXY_MODE"', busy);
+    assert.equal(
+      result.stdout.trim(),
+      'external',
+      'unattended default keeps the existing-proxy fallback',
+    );
+    result = run('choose_https_port; echo "$IG_PROXY_MODE $IG_HTTPS_PORT"', {
+      ...busy,
+      IG_HTTPS_PORT: '8443',
+    });
+    assert.equal(result.stdout.trim(), 'bundled 8443');
+    result = run('choose_https_port', { IG_HTTPS_PORT: '80' });
+    assert.match(result.stderr, /HTTPS_PORT_INVALID/);
+
+    const port80 = {
+      PORTS: 'n1 0.0.0.0:80->80/tcp\n',
+      LABELS: 'n1=nginx:',
+      IG_ACCESS_KIND: 'domain',
+    };
+    result = run('IG_HTTPS_PORT=9443; choose_certificate_plan', port80);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /ACME_HTTP_PORT_UNAVAILABLE/);
+    result = run(
+      'IG_HTTPS_PORT=9443; choose_certificate_plan; echo "$IG_RELAY_ROLE $IG_TLS_ISSUER"',
+      {
+        ...port80,
+        IG_TLS_ISSUER: 'internal',
+      },
+    );
+    assert.equal(result.stdout.trim().split('\n').at(-1), 'none internal');
+    result = run(
+      'IG_HTTPS_PORT=443; choose_certificate_plan; echo "$IG_RELAY_ROLE $IG_TLS_ISSUER"',
+      port80,
+    );
+    assert.equal(result.stdout.trim().split('\n').at(-1), 'none auto');
+    result = run('IG_HTTPS_PORT=9443; choose_certificate_plan; echo "$IG_RELAY_ROLE"', {
+      ...port80,
+      LABELS: 'n1=invoice-generator-other:holder',
+    });
+    assert.equal(result.stdout.trim().split('\n').at(-1), 'member');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('Caddyfile uses automatic certificates for domains and IP certificates with local CA fallback', () => {

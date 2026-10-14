@@ -1,0 +1,5 @@
+# Private ACME directory (isolated tests or an internal CA): mounts its root certificate.
+services:
+  caddy:
+    volumes:
+      - ${IG_ACME_CA_ROOT_FILE:?IG_ACME_CA_ROOT_FILE is required}:/etc/caddy/acme-ca-root.pem:ro

@@ -2,14 +2,16 @@
 # End-to-end installer test. Runs ONLY as root on a disposable CI runner (GitHub Actions):
 # it installs Invoice Generator under /opt/invoice-generator and binds ports 80/443.
 #
-# usage: sudo -E tests/installer/e2e.sh domain|ip|external
-#   domain    bundled Caddy, domain name, non-interactive answers
-#   ip        bundled Caddy, public IPv4, real interactive wizard driven through a PTY
-#   external  Nginx already owns 80/443; app on loopback behind the generated Nginx config
+# usage: sudo -E tests/installer/e2e.sh domain|ip|external|custom-port|conflict
+#   domain       bundled Caddy, domain name, non-interactive answers
+#   ip           bundled Caddy, public IPv4, real interactive wizard driven through a PTY
+#   external     Nginx already owns 80/443; app on loopback behind the generated Nginx config
+#   custom-port  bundled Caddy on HTTPS port 8443 (unattended), Nginx keeps 443
+#   conflict     interactive wizard: 8443 is taken by Nginx and refused, then 9443 is chosen
 # All modes then test backup, restore, upgrade, failed-upgrade rollback and isolation.
 set -Eeuo pipefail
 
-mode="${1:?usage: e2e.sh domain|ip|external}"
+mode="${1:?usage: e2e.sh domain|ip|external|custom-port|conflict}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 [[ "${CI:-}" == true && "${GITHUB_ACTIONS:-}" == true && "$(id -u)" -eq 0 ]] ||
   {
@@ -41,29 +43,34 @@ expect_failure() {
   [[ "$output" == *"[$code]"* ]] || fail "expected error code $code"
 }
 
+port=443
 case "$mode" in
   domain | external) host=invoice.ci.test ;;
   ip) host=203.0.113.10 ;;
+  custom-port) host=invoice.ci.test port=8443 ;;
+  conflict) host=invoice.ci.test port=9443 ;;
   *) fail "unknown mode $mode" ;;
 esac
-https=(curl -fsS -k --max-time 20 --connect-to "$host:443:127.0.0.1:443" -b "$jar" -c "$jar")
+origin="https://$host"
+[[ "$port" == 443 ]] || origin="https://$host:$port"
+https=(curl -fsS -k --max-time 20 --connect-to "$host:$port:127.0.0.1:$port" -b "$jar" -c "$jar")
 
 login() {
   rm -f "$jar"
   local token
-  token="$("${https[@]}" "https://$host/login" | grep -oE '[a-f0-9]{112}' | head -n 1)"
+  token="$("${https[@]}" "$origin/login" | grep -oE '[a-f0-9]{112}' | head -n 1)"
   [[ -n "$token" ]] || fail 'login token missing'
   jq -n --arg u ci-admin --rawfile p "$work/admin-password" '{username: $u, password: $p}' >"$work/login.json"
-  "${https[@]}" -X POST "https://$host/api/auth/login" -H "Origin: https://$host" -H "X-CSRF-Token: $token" \
+  "${https[@]}" -X POST "$origin/api/auth/login" -H "Origin: $origin" -H "X-CSRF-Token: $token" \
     -H 'Content-Type: application/json' --data @"$work/login.json" >/dev/null
 }
 api_post() {
   local token
-  token="$("${https[@]}" "https://$host/api/auth/csrf" | jq -r .csrfToken)"
-  "${https[@]}" -X POST "https://$host$1" -H "Origin: https://$host" -H "X-CSRF-Token: $token" \
+  token="$("${https[@]}" "$origin/api/auth/csrf" | jq -r .csrfToken)"
+  "${https[@]}" -X POST "$origin$1" -H "Origin: $origin" -H "X-CSRF-Token: $token" \
     -H 'Content-Type: application/json' --data "$2" >/dev/null
 }
-customer_count() { "${https[@]}" "https://$host/api/customers" | jq '.data | length'; }
+customer_count() { "${https[@]}" "$origin/api/customers" | jq '.data | length'; }
 installed_version() { invoice-generator version | awk '{print $3}'; }
 service_container() {
   docker ps -q --filter label=com.docker.compose.project=invoice-generator --filter "label=com.docker.compose.service=$1"
@@ -102,12 +109,17 @@ docker volume create neighbor_data >/dev/null
 docker run -d --name neighbor-app --label com.docker.compose.project=neighbor -v neighbor_data:/data \
   busybox:1.37 sh -c 'echo keep-me > /data/marker; sleep infinity' >/dev/null
 
-if [[ "$mode" == external ]]; then
+if [[ "$mode" == external || "$mode" == custom-port || "$mode" == conflict ]]; then
   step 'start Nginx on 80/443 before installation'
   mkdir -p "$work/nginx/conf.d" "$work/nginx/tls"
   openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=$host" -addext "subjectAltName=DNS:$host" \
     -keyout "$work/nginx/tls/key.pem" -out "$work/nginx/tls/cert.pem" 2>/dev/null
-  printf 'server { listen 80 default_server; listen 443 ssl default_server; ssl_certificate /tls/cert.pem; ssl_certificate_key /tls/key.pem; return 404; }\n' \
+  listen=''
+  [[ "$mode" == custom-port ]] && listen='listen 80 default_server; '
+  [[ "$mode" == conflict ]] && listen='listen 8443 ssl; '
+  [[ "$mode" == external ]] && listen='listen 80 default_server; listen 443 ssl default_server; '
+  [[ "$mode" == custom-port ]] && listen+='listen 443 ssl default_server; '
+  printf 'server { %sssl_certificate /tls/cert.pem; ssl_certificate_key /tls/key.pem; return 404; }\n' "$listen" \
     >"$work/nginx/conf.d/default.conf"
   docker run -d --name ci-nginx --network host -v "$work/nginx/conf.d:/etc/nginx/conf.d:ro" \
     -v "$work/nginx/tls:/tls:ro" nginx:1.27-alpine >/dev/null
@@ -129,6 +141,24 @@ if [[ "$mode" == ip ]]; then
   step 'interactive installation through the real wizard'
   printf '%s' '[["访问地址", "203.0.113.10"], ["管理员用户名或邮箱", "ci-admin"], ["管理员密码", "env:IG_TEST_PASSWORD"], ["再次输入密码", "env:IG_TEST_PASSWORD"]]' >"$work/answers.json"
   IG_TEST_PASSWORD="$password" python3 "$root/tests/installer/drive-tty.py" "$work/answers.json" -- bash "$dist/a/install.sh"
+elif [[ "$mode" == conflict ]]; then
+  step 'an explicitly requested busy port is refused without touching its owner'
+  expect_failure HTTPS_PORT_IN_USE env IG_NONINTERACTIVE=1 IG_ACCESS_HOST="$host" IG_HTTPS_PORT=8443 \
+    IG_ADMIN_USERNAME=ci-admin IG_ADMIN_PASSWORD_FILE="$work/admin-password" bash "$dist/a/install.sh"
+  [[ ! -f /opt/invoice-generator/config/installer.env ]] || fail 'refused install left an installation marker'
+  [[ "$(docker inspect --format '{{.State.Running}}' ci-nginx)" == true ]] || fail 'port owner was stopped'
+  curl -fsk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/ | grep -q 404 || fail 'port owner no longer answers'
+  rm -rf /opt/invoice-generator
+
+  step 'interactive wizard: busy 8443 is refused, then 9443 is accepted'
+  printf '%s' '[["访问地址", "invoice.ci.test"], ["HTTPS 端口", "8443"], ["HTTPS 端口", "9443"], ["管理员用户名或邮箱", "ci-admin"], ["管理员密码", "env:IG_TEST_PASSWORD"], ["再次输入密码", "env:IG_TEST_PASSWORD"]]' >"$work/answers.json"
+  IG_TEST_PASSWORD="$password" python3 "$root/tests/installer/drive-tty.py" "$work/answers.json" -- bash "$dist/a/install.sh" |
+    tee "$work/wizard.log"
+  grep -q '端口 8443 已被占用' "$work/wizard.log" || fail 'busy port was not reported'
+elif [[ "$mode" == custom-port ]]; then
+  step 'non-interactive installation on HTTPS port 8443 while Nginx keeps 80/443'
+  IG_NONINTERACTIVE=1 IG_ACCESS_HOST="$host" IG_HTTPS_PORT=8443 IG_ADMIN_USERNAME=ci-admin \
+    IG_ADMIN_PASSWORD_FILE="$work/admin-password" bash "$dist/a/install.sh"
 else
   step "non-interactive installation ($mode)"
   IG_NONINTERACTIVE=1 IG_ACCESS_HOST="$host" IG_ADMIN_USERNAME=ci-admin IG_ADMIN_PASSWORD_FILE="$work/admin-password" \
@@ -152,6 +182,23 @@ if [[ "$mode" == external ]]; then
   sleep 2
 else
   grep -q '^PROXY_MODE=bundled$' /opt/invoice-generator/config/installer.env || fail 'bundled mode not selected'
+  grep -q "^HTTPS_PORT=$port$" /opt/invoice-generator/config/installer.env || fail 'HTTPS port not recorded'
+  grep -q "^APP_ORIGIN=$origin$" /opt/invoice-generator/config/app.env || fail 'APP_ORIGIN must carry the public port'
+  docker port "$(service_container caddy)" 443/tcp | grep -q ":$port$" || fail "Caddy is not published on $port"
+  if [[ "$mode" == custom-port ]]; then
+    # Nginx (an unrelated program) owns port 80 and the explicit internal CA was required.
+    grep -q '^RELAY_ROLE=none$' /opt/invoice-generator/config/installer.env || fail 'relay role must be none'
+    docker port "$(service_container caddy)" 80/tcp | grep -q '^127\.0\.0\.1:' || fail 'port 80 must stay loopback-only'
+    [[ "$(docker inspect --format '{{.State.Running}}' ci-nginx)" == true ]] || fail 'Nginx was stopped'
+    curl -fsk -o /dev/null -w '%{http_code}' https://127.0.0.1:443/ | grep -q 404 || fail 'Nginx no longer owns 443'
+  else
+    grep -q '^RELAY_ROLE=holder$' /opt/invoice-generator/config/installer.env || fail 'relay role must be holder'
+    if [[ "$mode" == conflict ]]; then
+      curl -fsk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/ | grep -q 404 || fail 'Nginx no longer owns 8443'
+    fi
+    [[ "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $host" http://127.0.0.1/x)" == "308 $origin/x" ]] ||
+      fail 'HTTP must redirect to the HTTPS origin'
+  fi
 fi
 systemctl is-active --quiet invoice-generator-backup.timer || fail 'backup timer inactive'
 invoice-generator doctor
@@ -159,6 +206,14 @@ invoice-generator status
 
 step 'business data through the public HTTPS entry'
 login
+# Cookies are host-only, Secure and HttpOnly; the CSRF/Origin check is exact, including the port.
+grep -q '#HttpOnly_'"$host"'.*TRUE.*__Host-ft.sid' "$jar" || fail 'session cookie must be Secure and HttpOnly'
+wrong_origin="https://$host"
+[[ "$port" == 443 ]] && wrong_origin="https://$host:8443"
+token="$("${https[@]}" "$origin/api/auth/csrf" | jq -r .csrfToken)"
+status="$(curl -s -k -o /dev/null -w '%{http_code}' --connect-to "$host:$port:127.0.0.1:$port" -b "$jar" -X POST \
+  "$origin/api/customers" -H "Origin: $wrong_origin" -H "X-CSRF-Token: $token" -H 'Content-Type: application/json' --data '{"id":"x"}')"
+[[ "$status" == 403 ]] || fail "a different origin must be refused (got $status)"
 api_post /api/customers '{"id":"customer-ci-a","buyerName":"CI Buyer A"}'
 [[ "$(customer_count)" == 1 ]] || fail 'customer A not stored'
 

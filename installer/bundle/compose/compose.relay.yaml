@@ -1,0 +1,17 @@
+# Shared port-80 relay between self-hosted projects on one server (docs/HTTPS_PORTS.md).
+# The proxy joins the external network oss-https-relay as <hostname>.acme-relay.invalid and is
+# labelled with its role, so the project that owns host port 80 can pass ACME HTTP-01
+# challenges for other hostnames to the right proxy. Only plain HTTP on port 80 is relayed.
+services:
+  caddy:
+    labels:
+      oss.https-relay: ${IG_RELAY_ROLE:?IG_RELAY_ROLE is required}
+    networks:
+      oss_https_relay:
+        aliases:
+          - ${IG_RELAY_ALIAS:?IG_RELAY_ALIAS is required}
+
+networks:
+  oss_https_relay:
+    name: oss-https-relay
+    external: true
