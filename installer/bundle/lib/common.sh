@@ -306,8 +306,8 @@ ensure_relay_network() {
 
 # Issuer of the certificate served on the local HTTPS port (empty when none is served yet).
 served_certificate() {
-  local host="$1" port="$2" sni=(-servername "$host")
-  [[ "$IG_ACCESS_KIND" == ip ]] && sni=()
+  local host="$1" port="$2" sni=()
+  [[ "$IG_ACCESS_KIND" == ip ]] || sni=(-servername "$host")
   openssl s_client -connect "127.0.0.1:$port" "${sni[@]}" </dev/null 2>/dev/null |
     openssl x509 -noout -issuer -enddate 2>/dev/null || true
 }

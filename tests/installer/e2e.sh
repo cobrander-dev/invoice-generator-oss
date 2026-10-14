@@ -139,7 +139,7 @@ if [[ "$mode" == ip ]]; then
   rm -rf /opt/invoice-generator
 
   step 'interactive installation through the real wizard'
-  printf '%s' '[["访问地址", "203.0.113.10"], ["管理员用户名或邮箱", "ci-admin"], ["管理员密码", "env:IG_TEST_PASSWORD"], ["再次输入密码", "env:IG_TEST_PASSWORD"]]' >"$work/answers.json"
+  printf '%s' '[["访问地址", "203.0.113.10"], ["HTTPS 端口", ""], ["管理员用户名或邮箱", "ci-admin"], ["管理员密码", "env:IG_TEST_PASSWORD"], ["再次输入密码", "env:IG_TEST_PASSWORD"]]' >"$work/answers.json"
   IG_TEST_PASSWORD="$password" python3 "$root/tests/installer/drive-tty.py" "$work/answers.json" -- bash "$dist/a/install.sh"
 elif [[ "$mode" == conflict ]]; then
   step 'an explicitly requested busy port is refused without touching its owner'
@@ -147,7 +147,7 @@ elif [[ "$mode" == conflict ]]; then
     IG_ADMIN_USERNAME=ci-admin IG_ADMIN_PASSWORD_FILE="$work/admin-password" bash "$dist/a/install.sh"
   [[ ! -f /opt/invoice-generator/config/installer.env ]] || fail 'refused install left an installation marker'
   [[ "$(docker inspect --format '{{.State.Running}}' ci-nginx)" == true ]] || fail 'port owner was stopped'
-  curl -fsk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/ | grep -q 404 || fail 'port owner no longer answers'
+  curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/ | grep -q 404 || fail 'port owner no longer answers'
   rm -rf /opt/invoice-generator
 
   step 'interactive wizard: busy 8443 is refused, then 9443 is accepted'
@@ -190,17 +190,23 @@ else
     grep -q '^RELAY_ROLE=none$' /opt/invoice-generator/config/installer.env || fail 'relay role must be none'
     docker port "$(service_container caddy)" 80/tcp | grep -q '^127\.0\.0\.1:' || fail 'port 80 must stay loopback-only'
     [[ "$(docker inspect --format '{{.State.Running}}' ci-nginx)" == true ]] || fail 'Nginx was stopped'
-    curl -fsk -o /dev/null -w '%{http_code}' https://127.0.0.1:443/ | grep -q 404 || fail 'Nginx no longer owns 443'
+    curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:443/ | grep -q 404 || fail 'Nginx no longer owns 443'
   else
     grep -q '^RELAY_ROLE=holder$' /opt/invoice-generator/config/installer.env || fail 'relay role must be holder'
     if [[ "$mode" == conflict ]]; then
-      curl -fsk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/ | grep -q 404 || fail 'Nginx no longer owns 8443'
+      curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/ | grep -q 404 || fail 'Nginx no longer owns 8443'
     fi
     [[ "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $host" http://127.0.0.1/x)" == "308 $origin/x" ]] ||
       fail 'HTTP must redirect to the HTTPS origin'
   fi
 fi
 systemctl is-active --quiet invoice-generator-backup.timer || fail 'backup timer inactive'
+if [[ "$mode" != external ]]; then
+  # The certificate actually served is reported as it is (the local CA in these tests).
+  invoice-generator https | tee "$work/https.log"
+  grep -q 'Caddy Local Authority' "$work/https.log" || fail 'served certificate not reported'
+  grep -q '本机 CA 证书' "$work/https.log" || fail 'local CA must not be reported as a public certificate'
+fi
 invoice-generator doctor
 invoice-generator status
 
