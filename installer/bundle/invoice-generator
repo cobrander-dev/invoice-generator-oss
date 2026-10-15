@@ -284,7 +284,7 @@ cmd_upgrade() {
     say "已是最新版本 ${old_version}。"
     return 0
   fi
-  [[ "$(printf '%s\n%s\n' "$old_version" "$new_version" | sort -V | tail -n 1)" == "$new_version" ]] ||
+  semver_gt "$new_version" "$old_version" ||
     die DOWNGRADE_REFUSED "不支持降级：当前 ${old_version}，目标 ${new_version}。"
   say "升级：$old_version → $new_version"
   confirm_phrase UPGRADE '升级前会自动备份并在隔离环境中验证新版本。'
@@ -359,7 +359,8 @@ prune_releases() {
     kept=$((kept + 1))
     ((kept <= 2)) && continue
     rm -rf -- "${IG_RELEASES_DIR:?}/$name"
-  done < <(find "$IG_RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -not -name '.*' -printf '%f\n' | sort -rV)
+  done < <(mapfile -t names < <(find "$IG_RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -not -name '.*' -printf '%f\n')
+    semver_sort_desc ${names[@]+"${names[@]}"})
 }
 
 cmd_logs() {

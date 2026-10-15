@@ -102,7 +102,8 @@ printf 'FROM invoice-generator:ci-a\nCOPY write-then-fail.js /app/write-then-fai
   >"$work/late-image/Dockerfile"
 docker build -q -t invoice-generator:ci-late-failure "$work/late-image" >/dev/null
 docker pull -q "$caddy_image" >/dev/null
-for spec in a:v0.0.1-ci.1:ci-a b:v0.0.1-ci.2:ci-b broken:v0.0.1-ci.3:ci-broken late:v0.0.1-ci.4:ci-late-failure; do
+# b is a stable release: upgrading from a prerelease to it must work (v0.0.1 > v0.0.1-ci.1).
+for spec in a:v0.0.1-ci.1:ci-a b:v0.0.1:ci-b broken:v0.0.2-ci.3:ci-broken late:v0.0.2-ci.4:ci-late-failure; do
   IFS=: read -r name version tag <<<"$spec"
   IG_ALLOW_LOCAL_IMAGES=1 "$root/scripts/build-installer-bundle.sh" "$version" "invoice-generator:$tag" "$caddy_image" "$dist/$name" >/dev/null
 done
@@ -328,20 +329,20 @@ login
 
 step 'upgrade to a new release'
 invoice-generator upgrade --bundle "$dist/b/invoice-generator-installer.tar.gz" --sha256 "$(sha b)" --yes
-[[ "$(installed_version)" == v0.0.1-ci.2 ]] || fail 'upgrade version'
+[[ "$(installed_version)" == v0.0.1 ]] || fail 'upgrade version'
 [[ "$(running_image)" == invoice-generator:ci-b ]] || fail 'upgrade image'
 login
 [[ "$(customer_count)" == 1 ]] || fail 'upgrade lost data'
 
 step 'a release that fails isolated validation is never promoted'
 expect_failure CANDIDATE_FAILED invoice-generator upgrade --bundle "$dist/broken/invoice-generator-installer.tar.gz" --sha256 "$(sha broken)" --yes
-[[ "$(installed_version)" == v0.0.1-ci.2 && "$(running_image)" == invoice-generator:ci-b ]] || fail 'failed candidate changed production'
+[[ "$(installed_version)" == v0.0.1 && "$(running_image)" == invoice-generator:ci-b ]] || fail 'failed candidate changed production'
 
 step 'a release that fails after promotion is rolled back with the pre-upgrade data'
 login
 api_post /api/customers '{"id":"customer-ci-c","buyerName":"CI Buyer C"}'
 expect_failure UPGRADE_ROLLED_BACK invoice-generator upgrade --bundle "$dist/late/invoice-generator-installer.tar.gz" --sha256 "$(sha late)" --yes
-[[ "$(installed_version)" == v0.0.1-ci.2 && "$(running_image)" == invoice-generator:ci-b ]] || fail 'rollback version'
+[[ "$(installed_version)" == v0.0.1 && "$(running_image)" == invoice-generator:ci-b ]] || fail 'rollback version'
 invoice-generator doctor
 login
 [[ "$(customer_count)" == 2 ]] || fail 'rollback did not return to the pre-upgrade data'

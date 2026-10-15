@@ -88,6 +88,20 @@ sudo invoice-generator upgrade v1.2.3   # 指定版本
 
 第 1–3 步失败时不做任何更改；第 5 步失败时，先把新版本运行期间的数据库另存为 `*-failed-upgrade` 备份，再自动回滚到原版本和升级前数据。若新版本在失败前已有用户录入数据，这些数据保存在该备份中，需要人工核对补录；回滚不会直接丢弃它们。不支持降级。
 
+### 从测试版（RC）升级到正式版
+
+测试版（v0.1.0-rc.1 至 rc.8）自带的管理命令比较版本号有误，会把正式版 v0.1.0 当作旧版本并以 `DOWNGRADE_REFUSED` 拒绝（不会修改任何内容）。只需用正式版自带的管理命令升级一次，之后的升级照常使用 `sudo invoice-generator upgrade`：
+
+```bash
+base=https://github.com/cobrander-dev/invoice-generator-oss/releases/download/v0.1.0
+curl -fsSL "$base/invoice-generator-installer.tar.gz" -o invoice-generator-installer.tar.gz
+curl -fsSL "$base/SHA256SUMS" -o SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+mkdir ig && tar -xzf invoice-generator-installer.tar.gz -C ig && sudo bash ig/invoice-generator upgrade v0.1.0
+```
+
+先核对校验值再以 root 运行。升级命令会再次从 GitHub 下载并校验正式版安装包，然后执行与上文相同的备份、隔离验证和自动回滚流程。
+
 ## 常见错误代码
 
 | 代码 | 含义与处理 |

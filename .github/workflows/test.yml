@@ -76,7 +76,7 @@ jobs:
         run: |
           shellcheck -x -S warning installer/install.sh installer/bundle/setup.sh installer/bundle/invoice-generator \
             installer/bundle/lib/*.sh installer/bundle/oss-gateway.sh scripts/build-installer-bundle.sh tests/installer/e2e.sh \
-            tests/installer/legacy-upgrade.sh
+            tests/installer/legacy-upgrade.sh tests/installer/rc-to-stable.sh
       - name: Validate production Caddyfiles with the pinned Caddy image
         run: |
           . installer/bundle/lib/common.sh
@@ -191,3 +191,18 @@ jobs:
           sudo docker ps -a
           sudo invoice-generator logs caddy || true
           sudo cat /opt/invoice-generator/config/installer.env /opt/invoice-generator/config/Caddyfile || true
+
+  installer-rc-to-stable:
+    # Release candidates must reach the stable release; this mirrors the acceptance VPS.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Upgrade the published v0.1.0-rc.8 (shared gateway) to a stable build
+        run: sudo -E tests/installer/rc-to-stable.sh
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          sudo docker ps -a
+          sudo invoice-generator logs app || true
+          sudo cat /opt/invoice-generator/config/installer.env || true

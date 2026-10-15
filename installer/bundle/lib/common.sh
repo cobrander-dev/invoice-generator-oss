@@ -186,6 +186,56 @@ container_healthy() {
 
 app_healthy() { container_healthy "$(compose_in "${1:-$IG_CURRENT}" ps -q app 2>/dev/null)"; }
 
+# semver_gt A B: true when version A has higher SemVer precedence than B (vMAJOR.MINOR.PATCH with
+# an optional -prerelease). A release outranks its prereleases: v0.1.0 > v0.1.0-rc.8, which
+# `sort -V` gets wrong.
+semver_gt() {
+  local LC_ALL=C a="${1#v}" b="${2#v}" ap='' bp='' i x y
+  local -a an bn ai bi
+  [[ "$a" == *-* ]] && ap="${a#*-}"
+  [[ "$b" == *-* ]] && bp="${b#*-}"
+  IFS=. read -r -a an <<<"${a%%-*}"
+  IFS=. read -r -a bn <<<"${b%%-*}"
+  for i in 0 1 2; do
+    ((10#${an[i]:-0} > 10#${bn[i]:-0})) && return 0
+    ((10#${an[i]:-0} < 10#${bn[i]:-0})) && return 1
+  done
+  [[ "$ap" != "$bp" ]] || return 1
+  [[ -n "$ap" ]] || return 0
+  [[ -n "$bp" ]] || return 1
+  IFS=. read -r -a ai <<<"$ap"
+  IFS=. read -r -a bi <<<"$bp"
+  for ((i = 0; ; i++)); do
+    ((i < ${#ai[@]})) || return 1
+    ((i < ${#bi[@]})) || return 0
+    x="${ai[i]}" y="${bi[i]}"
+    [[ "$x" != "$y" ]] || continue
+    if [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]]; then
+      ((10#$x > 10#$y))
+      return
+    fi
+    [[ ! "$x" =~ ^[0-9]+$ ]] || return 1 # numeric identifiers rank below alphanumeric ones
+    [[ ! "$y" =~ ^[0-9]+$ ]] || return 0
+    [[ "$x" > "$y" ]]
+    return
+  done
+}
+
+# Prints the given versions newest first (SemVer precedence).
+semver_sort_desc() {
+  local -a sorted=()
+  local version i
+  for version in "$@"; do
+    for ((i = ${#sorted[@]}; i > 0; i--)); do
+      semver_gt "$version" "${sorted[i - 1]}" || break
+      sorted[i]="${sorted[i - 1]}"
+    done
+    sorted[i]="$version"
+  done
+  ((${#sorted[@]})) && printf '%s\n' "${sorted[@]}"
+  return 0
+}
+
 # Public origin used for links, the exact Origin/CSRF check and cookies: the port is part of
 # the origin unless it is the standard 443.
 public_origin() {

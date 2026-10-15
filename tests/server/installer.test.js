@@ -556,3 +556,25 @@ test('gateway site keeps the app on loopback and adds only its own domain', () =
   assert.match(site, /max_size 70MB/);
   assert.equal(site.match(/^\S.*\{$/gm).length, 1);
 });
+
+test('upgrades order versions by SemVer: a release outranks its release candidates', () => {
+  const gt = (a, b) => bash(`${lib} semver_gt "$A" "$B"`, { A: a, B: b }).status === 0;
+  for (const [newer, older] of [
+    ['v0.1.0', 'v0.1.0-rc.8'],
+    ['v0.1.0-rc.10', 'v0.1.0-rc.9'],
+    ['v0.1.1', 'v0.1.0'],
+    ['v0.10.0', 'v0.9.9'],
+    ['v1.0.0', 'v1.0.0-rc.1'],
+    ['v1.0.0-rc.1', 'v1.0.0-beta.11'],
+    ['v1.0.0-alpha.beta', 'v1.0.0-alpha.1'],
+  ]) {
+    assert.equal(gt(newer, older), true, `${newer} > ${older}`);
+    assert.equal(gt(older, newer), false, `${older} < ${newer}`);
+  }
+  assert.equal(gt('v0.1.0', 'v0.1.0'), false);
+  const order = bash(`${lib} semver_sort_desc v0.1.0-rc.7 v0.1.0 v0.1.0-rc.10 v0.1.1 v0.1.0-rc.8`);
+  assert.equal(order.stdout, 'v0.1.1\nv0.1.0\nv0.1.0-rc.10\nv0.1.0-rc.8\nv0.1.0-rc.7\n');
+  const cli = read('installer/bundle/invoice-generator');
+  assert.doesNotMatch(cli, /sort -r?V/);
+  assert.match(cli, /semver_gt "\$new_version" "\$old_version" \|\|\n\s+die DOWNGRADE_REFUSED/);
+});
